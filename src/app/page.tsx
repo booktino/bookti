@@ -226,10 +226,28 @@ export default function ComingSoon() {
           </a>
         </div>
 
-        <div style={{ textAlign:"center",marginTop:44,fontSize:12,color:C.faint,borderTop:`1px solid ${C.border}`,paddingTop:22 }}>
+        <div style={{ textAlign:"center",marginTop:44,fontSize:12,color:C.faint,borderTop:`1px solid ${C.border}`,paddingTop:22,paddingBottom:80 }}>
           © 2026 Bookti · Bergen, Norge · kontakt@bookti.no
         </div>
       </div>
+
+      <footer style={{ position:"fixed",bottom:0,left:0,right:0,zIndex:20,display:"flex",alignItems:"center",justifyContent:"center",gap:16,padding:"14px 24px",background:C.surface,borderTop:`1px solid ${C.border}`,boxShadow:"0 -4px 20px rgba(15,110,86,0.06)" }}>
+        <a
+          href="https://www.instagram.com/bookti.no/"
+          target="_blank"
+          rel="noopener noreferrer"
+          style={{ display:"inline-flex",alignItems:"center",gap:8,color:C.primary,fontSize:14,fontWeight:700,textDecoration:"none" }}
+        >
+          <svg width="20" height="20" viewBox="0 0 24 24" fill="none" aria-hidden="true">
+            <rect x="2" y="2" width="20" height="20" rx="5" stroke="#0F6E56" strokeWidth="2"/>
+            <circle cx="12" cy="12" r="4.5" stroke="#0F6E56" strokeWidth="2"/>
+            <circle cx="17.5" cy="6.5" r="1.2" fill="#0F6E56"/>
+          </svg>
+          @bookti.no
+        </a>
+        <span style={{ color:C.border }}>|</span>
+        <span style={{ fontSize:12,color:C.faint }}>© 2026 Bookti</span>
+      </footer>
     </main>
   );
 }
