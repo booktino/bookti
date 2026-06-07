@@ -1,0 +1,85 @@
+export const no = {
+  common: {
+    confirm: "Bekreft",
+    cancel: "Avbryt",
+    back: "Tilbake",
+    loading: "Laster…",
+    error: "Noe gikk galt. Prøv igjen.",
+  },
+  booking: {
+    stepService: "Tjeneste",
+    stepDate: "Dato",
+    stepPhone: "Telefon",
+    stepPay: "Vipps",
+    selectService: "Velg tjeneste",
+    selectDateTime: "Velg dato og tid",
+    enterPhone: "Skriv inn mobilnummer",
+    phonePlaceholder: "9X XX XX XX",
+    phoneHint: "Vi sender SMS-bekreftelse til dette nummeret",
+    confirmBooking: "Bekreft booking",
+    bookingConfirmed: "Booking bekreftet!",
+    slotUnavailable: "Denne tiden er ikke lenger ledig",
+    payWithVipps: "Betal med Vipps",
+    smsConfirmation: "Du får SMS-bekreftelse øyeblikkelig",
+    next: "Neste",
+    summary: "Oppsummering",
+  },
+  admin: {
+    calendar: "Kalender",
+    clients: "Kunder",
+    invoices: "Fakturaer",
+    settings: "Innstillinger",
+    panelTitle: "Adminpanel",
+    businessSettings: "Bedriftsinnstillinger",
+    openingHours: "Åpningstider",
+    notifications: "Varsler",
+    vippsIntegration: "Vipps-integrasjon",
+    save: "Lagre",
+  },
+  reminders: {
+    sms24h: (name: string, time: string, business: string) =>
+      `Hei ${name}! Påminnelse: Du har time hos ${business} i morgen kl. ${time}. Svar STOPP for å melde deg av.`,
+    sms2h: (name: string, time: string, business: string) =>
+      `Hei ${name}! Din time hos ${business} starter om 2 timer (kl. ${time}). Vi sees snart!`,
+    pushNewBooking: (customer: string, time: string) =>
+      `Ny bestilling! ${customer} — ${time}`,
+    pushCancelled: (customer: string, time: string) =>
+      `Avbestilling: ${customer} — ${time}`,
+  },
+  dashboard: {
+    appointmentsToday: "Avtaler i dag",
+    weeklyRevenue: "Inntekt denne uken",
+    occupancy: "Belagte timer",
+    activeCustomers: "Aktive kunder",
+    todaysAppointments: "Dagens avtaler",
+    upcoming: "Kommende",
+    done: "Ferdig",
+    newBooking: "Ny bestilling!",
+  },
+  invoicing: {
+    invoice: "Faktura",
+    mvaSpecification: "MVA-spesifikasjon",
+    subtotal: "Sum ekskl. MVA",
+    mva: "MVA",
+    total: "Totalt å betale",
+    dueDate: "Forfallsdato",
+    altinnExport: "Eksporter til Altinn",
+  },
+  pricing: {
+    flatSubscription: "Fast månedspris — 0 % provisjon",
+    perMonth: "per måned",
+    noHiddenFees: "Ingen skjulte gebyrer på bookinger",
+    freeTrial: "6 måneder gratis",
+    freeTrialNote: "6 måneder gratis — ingen kredittkort nødvendig",
+  },
+  features: {
+    onlineBooking: "Online booking 24/7",
+    vipps: "Vipps-betaling",
+    mvaAltinn: "MVA-faktura + Altinn",
+    smsReminders: "SMS-påminnelser",
+    flatPrice: "299–399 kr/mnd",
+    builtForNorway: "Bygget for Norge",
+  },
+} as const;
+
+export type NoStrings = typeof no;
