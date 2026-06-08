@@ -6,6 +6,12 @@ import { Logo } from "@/components/Logo";
 import { no } from "@/i18n/no";
 import type { Database } from "@/lib/database.types";
 import { createClient } from "@/lib/supabase";
+import {
+  defaultWeekSchedule,
+  mergeWithDefaults,
+  WEEKDAY_LABELS,
+  type AvailabilityEntry,
+} from "@/lib/availability";
 import { PAYMENT_OPTIONS } from "@/lib/payments/methods";
 import { FREE_TRIAL_MONTHS } from "@/lib/pricing/plans";
 
@@ -239,6 +245,13 @@ export default function AdminPage() {
   const [staffForm, setStaffForm] = useState<StaffForm>(EMPTY_STAFF_FORM);
   const [staffSaving, setStaffSaving] = useState(false);
   const [deleteStaffId, setDeleteStaffId] = useState<string | null>(null);
+
+  const [availabilityStaff, setAvailabilityStaff] = useState<Staff | null>(null);
+  const [availabilityForm, setAvailabilityForm] = useState<AvailabilityEntry[]>(
+    defaultWeekSchedule(),
+  );
+  const [availabilitySaving, setAvailabilitySaving] = useState(false);
+  const [availabilityLoading, setAvailabilityLoading] = useState(false);
 
   useEffect(() => {
     const id = setInterval(() => setNotifVisible((v) => !v), 2800);
@@ -599,6 +612,61 @@ export default function AdminPage() {
       setStaffCount(next.filter((s) => s.is_active).length);
     }
     setDeleteStaffId(null);
+  }
+
+  async function openAvailabilityModal(member: Staff) {
+    setAvailabilityStaff(member);
+    setAvailabilityForm(defaultWeekSchedule());
+    setAvailabilityLoading(true);
+
+    const supabase = createClient();
+    const { data } = await supabase
+      .from("availability")
+      .select("day_of_week, start_time, end_time, is_active")
+      .eq("staff_id", member.id);
+
+    if (data && data.length > 0) {
+      setAvailabilityForm(mergeWithDefaults(data));
+    }
+
+    setAvailabilityLoading(false);
+  }
+
+  function closeAvailabilityModal() {
+    setAvailabilityStaff(null);
+    setAvailabilityForm(defaultWeekSchedule());
+  }
+
+  function updateAvailabilityDay(
+    dayOfWeek: number,
+    patch: Partial<Pick<AvailabilityEntry, "start_time" | "end_time" | "is_active">>,
+  ) {
+    setAvailabilityForm((prev) =>
+      prev.map((row) => (row.day_of_week === dayOfWeek ? { ...row, ...patch } : row)),
+    );
+  }
+
+  async function saveAvailability(e: React.FormEvent) {
+    e.preventDefault();
+    if (!availabilityStaff) return;
+
+    setAvailabilitySaving(true);
+    const supabase = createClient();
+
+    const rows = availabilityForm.map((row) => ({
+      staff_id: availabilityStaff.id,
+      day_of_week: row.day_of_week,
+      start_time: row.start_time,
+      end_time: row.end_time,
+      is_active: row.is_active,
+    }));
+
+    const { error } = await supabase
+      .from("availability")
+      .upsert(rows, { onConflict: "staff_id,day_of_week" });
+
+    setAvailabilitySaving(false);
+    if (!error) closeAvailabilityModal();
   }
 
   if (loading) {
@@ -976,6 +1044,13 @@ export default function AdminPage() {
                           </td>
                           <td className="px-4 py-3 text-right">
                             <button
+                              onClick={() => openAvailabilityModal(member)}
+                              className="mr-2 rounded-lg border border-[#C8E6D8] px-2.5 py-1 text-xs font-bold text-[#0F6E56] hover:bg-[#d1f0e4]"
+                              title="Arbeidstider"
+                            >
+                              📅 Arbeidstider
+                            </button>
+                            <button
                               onClick={() => openEditStaff(member)}
                               className="mr-2 rounded-lg border border-[#C8E6D8] px-2.5 py-1 text-xs font-bold text-[#0F6E56] hover:bg-[#d1f0e4]"
                             >
@@ -1305,6 +1380,104 @@ export default function AdminPage() {
                 Slett
               </button>
             </div>
+          </div>
+        </div>
+      )}
+
+      {availabilityStaff && (
+        <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/30 p-4">
+          <div className="max-h-[90vh] w-full max-w-lg overflow-y-auto rounded-xl border border-[#C8E6D8] bg-white shadow-xl">
+            <div className="sticky top-0 flex items-center justify-between border-b border-[#C8E6D8] bg-white px-5 py-4">
+              <h3 className="text-sm font-bold text-[#0F6E56]">
+                📅 Arbeidstider for {availabilityStaff.name}
+              </h3>
+              <button
+                onClick={closeAvailabilityModal}
+                className="flex h-8 w-8 items-center justify-center rounded-lg text-[#7A9A8E] hover:bg-[#d1f0e4]"
+                aria-label="Lukk"
+              >
+                ✕
+              </button>
+            </div>
+            {availabilityLoading ? (
+              <p className="p-5 text-sm text-[#4A6B5E]">{no.common.loading}</p>
+            ) : (
+              <form onSubmit={saveAvailability} className="space-y-3 p-5">
+                {WEEKDAY_LABELS.map(({ day_of_week, label }) => {
+                  const row =
+                    availabilityForm.find((r) => r.day_of_week === day_of_week) ??
+                    defaultWeekSchedule().find((r) => r.day_of_week === day_of_week)!;
+
+                  return (
+                    <div
+                      key={day_of_week}
+                      className={`rounded-lg border px-3 py-3 ${
+                        row.is_active ? "border-[#C8E6D8] bg-[#f0faf6]/40" : "border-[#C8E6D8]/60 bg-white"
+                      }`}
+                    >
+                      <div className="flex items-center justify-between gap-3">
+                        <span className="text-sm font-semibold text-[#1a3d30]">{label}</span>
+                        <label className="flex cursor-pointer items-center gap-2">
+                          <span className="text-[10px] font-bold text-[#7A9A8E]">
+                            {row.is_active ? "Aktiv" : "Inaktiv"}
+                          </span>
+                          <input
+                            type="checkbox"
+                            checked={row.is_active}
+                            onChange={(e) =>
+                              updateAvailabilityDay(day_of_week, { is_active: e.target.checked })
+                            }
+                            className="accent-[#0F6E56]"
+                          />
+                        </label>
+                      </div>
+                      {row.is_active && (
+                        <div className="mt-2 grid grid-cols-2 gap-2">
+                          <div>
+                            <label className="text-[10px] font-bold text-[#7A9A8E]">Fra</label>
+                            <input
+                              type="time"
+                              value={row.start_time.slice(0, 5)}
+                              onChange={(e) =>
+                                updateAvailabilityDay(day_of_week, { start_time: e.target.value })
+                              }
+                              className={inputClass}
+                            />
+                          </div>
+                          <div>
+                            <label className="text-[10px] font-bold text-[#7A9A8E]">Til</label>
+                            <input
+                              type="time"
+                              value={row.end_time.slice(0, 5)}
+                              onChange={(e) =>
+                                updateAvailabilityDay(day_of_week, { end_time: e.target.value })
+                              }
+                              className={inputClass}
+                            />
+                          </div>
+                        </div>
+                      )}
+                    </div>
+                  );
+                })}
+                <div className="flex gap-2 pt-2">
+                  <button
+                    type="button"
+                    onClick={closeAvailabilityModal}
+                    className="flex-1 rounded-lg border border-[#C8E6D8] py-2.5 text-sm font-bold text-[#4A6B5E] hover:bg-[#EFF8F4]"
+                  >
+                    {no.common.cancel}
+                  </button>
+                  <button
+                    type="submit"
+                    disabled={availabilitySaving}
+                    className="btn-primary flex-1 rounded-lg py-2.5 text-sm font-bold text-white disabled:opacity-60"
+                  >
+                    {availabilitySaving ? no.common.loading : "Lagre"}
+                  </button>
+                </div>
+              </form>
+            )}
           </div>
         </div>
       )}

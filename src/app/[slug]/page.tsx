@@ -5,6 +5,18 @@ import { useCallback, useEffect, useMemo, useState } from "react";
 import { StepIndicator } from "@/components/StepIndicator";
 import { StripeWalletButton } from "@/components/StripeWalletButton";
 import { no } from "@/i18n/no";
+import {
+  defaultWeekSchedule,
+  getDaySchedule,
+  getSlotsForDate,
+  getSlotsForDateAnyStaff,
+  isDateAvailable,
+  isDateAvailableAnyStaff,
+  isPastDate,
+  mergeWithDefaults,
+  type AvailabilityEntry,
+  type BookingSlot,
+} from "@/lib/availability";
 import type { Database } from "@/lib/database.types";
 import { createClient } from "@/lib/supabase";
 
@@ -47,8 +59,6 @@ const STEPS = [
   { id: 4, label: no.booking.stepDetails },
 ];
 
-const SLOT_TIMES = ["09:00", "10:00", "11:00", "12:00", "13:00", "14:00", "15:00", "16:00"];
-
 const btnPrimary =
   "min-h-12 w-full rounded-xl bg-[#0F6E56] py-3.5 text-base font-bold text-white active:opacity-90";
 const btnSecondary =
@@ -77,19 +87,6 @@ function toDateKey(date: Date): string {
   const m = String(date.getMonth() + 1).padStart(2, "0");
   const d = String(date.getDate()).padStart(2, "0");
   return `${y}-${m}-${d}`;
-}
-
-function isWeekday(date: Date): boolean {
-  const day = date.getDay();
-  return day >= 1 && day <= 5;
-}
-
-function isPastDate(date: Date): boolean {
-  const today = new Date();
-  today.setHours(0, 0, 0, 0);
-  const compare = new Date(date);
-  compare.setHours(0, 0, 0, 0);
-  return compare < today;
 }
 
 function buildDateTime(dateKey: string, time: string): Date {
@@ -150,6 +147,14 @@ export default function SalonPage() {
   const [submitError, setSubmitError] = useState(false);
   const [confirmed, setConfirmed] = useState<ConfirmedBooking | null>(null);
   const [paymentReturn, setPaymentReturn] = useState<"success" | "cancelled" | null>(null);
+  const [staffAvailability, setStaffAvailability] = useState<AvailabilityEntry[]>(
+    defaultWeekSchedule(),
+  );
+  const [allStaffAvailability, setAllStaffAvailability] = useState<
+    Map<string, AvailabilityEntry[]>
+  >(new Map());
+  const [monthBookings, setMonthBookings] = useState<BookingSlot[]>([]);
+  const [scheduleLoading, setScheduleLoading] = useState(false);
 
   const fetchSalonData = useCallback(async () => {
     if (!slug) return;
@@ -206,11 +211,137 @@ export default function SalonPage() {
     }
   }, []);
 
+  useEffect(() => {
+    if (!salon || step !== 3) return;
+
+    let cancelled = false;
+
+    async function loadSchedule() {
+      setScheduleLoading(true);
+
+      const monthStart = new Date(
+        calendarMonth.getFullYear(),
+        calendarMonth.getMonth(),
+        1,
+      );
+      const monthEnd = new Date(
+        calendarMonth.getFullYear(),
+        calendarMonth.getMonth() + 1,
+        0,
+        23,
+        59,
+        59,
+      );
+
+      const bookingsQuery = supabase
+        .from("bookings")
+        .select("starts_at, ends_at, staff_id")
+        .eq("salon_id", salon!.id)
+        .neq("status", "cancelled")
+        .gte("starts_at", monthStart.toISOString())
+        .lte("starts_at", monthEnd.toISOString());
+
+      if (selectedStaffId) {
+        const [availRes, bookingsRes] = await Promise.all([
+          supabase
+            .from("availability")
+            .select("day_of_week, start_time, end_time, is_active")
+            .eq("staff_id", selectedStaffId),
+          bookingsQuery.eq("staff_id", selectedStaffId),
+        ]);
+
+        if (cancelled) return;
+
+        setStaffAvailability(
+          availRes.data?.length
+            ? mergeWithDefaults(availRes.data)
+            : defaultWeekSchedule(),
+        );
+        setMonthBookings((bookingsRes.data as BookingSlot[] | null) ?? []);
+      } else {
+        const staffIds = staffList.map((s) => s.id);
+        const [availRes, bookingsRes] = await Promise.all([
+          staffIds.length > 0
+            ? supabase
+                .from("availability")
+                .select("staff_id, day_of_week, start_time, end_time, is_active")
+                .in("staff_id", staffIds)
+            : Promise.resolve({ data: [] as never[] }),
+          bookingsQuery,
+        ]);
+
+        if (cancelled) return;
+
+        const byStaff = new Map<string, AvailabilityEntry[]>();
+        for (const staffId of staffIds) {
+          const rows =
+            (availRes.data as Array<AvailabilityEntry & { staff_id: string }> | null)?.filter(
+              (r) => r.staff_id === staffId,
+            ) ?? [];
+          byStaff.set(staffId, rows.length ? mergeWithDefaults(rows) : defaultWeekSchedule());
+        }
+        setAllStaffAvailability(byStaff);
+        setMonthBookings((bookingsRes.data as BookingSlot[] | null) ?? []);
+      }
+
+      setScheduleLoading(false);
+    }
+
+    loadSchedule();
+
+    return () => {
+      cancelled = true;
+    };
+  }, [salon, step, selectedStaffId, calendarMonth, staffList, supabase]);
+
+  useEffect(() => {
+    setSelectedDateKey(null);
+    setSelectedTime(null);
+  }, [selectedStaffId, selectedServiceId]);
+
   const selectedService = services.find((s) => s.id === selectedServiceId) ?? null;
   const selectedStaff = staffList.find((s) => s.id === selectedStaffId) ?? null;
   const phoneValid = clientPhone.replace(/\D/g, "").length === 8;
   const detailsValid = clientName.trim().length >= 2 && phoneValid;
   const calendarDays = useMemo(() => getCalendarDays(calendarMonth), [calendarMonth]);
+
+  const durationMin = selectedService?.duration_min ?? 60;
+
+  const availableSlots = useMemo(() => {
+    if (!selectedDateKey) return [];
+    if (selectedStaffId) {
+      return getSlotsForDate(
+        selectedDateKey,
+        staffAvailability,
+        durationMin,
+        monthBookings,
+        selectedStaffId,
+      );
+    }
+    return getSlotsForDateAnyStaff(
+      selectedDateKey,
+      allStaffAvailability,
+      staffList.map((s) => s.id),
+      durationMin,
+      monthBookings,
+    );
+  }, [
+    selectedDateKey,
+    selectedStaffId,
+    staffAvailability,
+    allStaffAvailability,
+    staffList,
+    durationMin,
+    monthBookings,
+  ]);
+
+  const selectedDayInactive = useMemo(() => {
+    if (!selectedDateKey) return false;
+    const day = buildDateTime(selectedDateKey, "09:00");
+    return selectedStaffId
+      ? !getDaySchedule(staffAvailability, day.getDay()).is_active
+      : !isDateAvailableAnyStaff(day, allStaffAvailability);
+  }, [selectedDateKey, selectedStaffId, staffAvailability, allStaffAvailability]);
 
   const monthLabel = new Intl.DateTimeFormat("nb-NO", {
     month: "long",
@@ -617,8 +748,13 @@ export default function SalonPage() {
                   }
 
                   const dateKey = toDateKey(day);
-                  const selectable = isWeekday(day) && !isPastDate(day);
+                  const past = isPastDate(day);
+                  const dayActive = selectedStaffId
+                    ? isDateAvailable(day, staffAvailability)
+                    : isDateAvailableAnyStaff(day, allStaffAvailability);
+                  const selectable = !past && dayActive;
                   const selected = selectedDateKey === dateKey;
+                  const inactive = !past && !dayActive;
 
                   return (
                     <button
@@ -629,47 +765,69 @@ export default function SalonPage() {
                         setSelectedDateKey(dateKey);
                         setSelectedTime(null);
                       }}
-                      className={`flex aspect-square items-center justify-center rounded-lg text-sm font-semibold transition-colors ${
-                        !selectable
-                          ? "cursor-not-allowed text-[#C8E6D8]"
-                          : selected
-                            ? "bg-[#0F6E56] text-white"
-                            : "border border-[#C8E6D8] active:border-[#5DCAA5] active:bg-[#5DCAA5]/10"
+                      className={`flex aspect-square flex-col items-center justify-center rounded-lg px-0.5 text-center transition-colors ${
+                        inactive
+                          ? "cursor-not-allowed bg-[#f5f5f5] text-[#C8E6D8]"
+                          : past
+                            ? "cursor-not-allowed text-[#C8E6D8]"
+                            : selected
+                              ? "bg-[#0F6E56] text-white"
+                              : "border border-[#C8E6D8] active:border-[#5DCAA5] active:bg-[#5DCAA5]/10"
                       }`}
                     >
-                      {day.getDate()}
+                      <span className={`text-sm font-semibold ${selected ? "text-white" : ""}`}>
+                        {day.getDate()}
+                      </span>
+                      {inactive && (
+                        <span
+                          className="mt-0.5 text-[5px] leading-tight font-medium text-[#7A9A8E]"
+                          title="Ikke tilgjengelig"
+                        >
+                          Ikke tilgjengelig
+                        </span>
+                      )}
                     </button>
                   );
                 })}
               </div>
 
-              <p className="mb-3 text-xs text-[#7A9A8E]">{no.booking.weekdaysOnly}</p>
-
               {selectedDateKey ? (
-                <>
-                  <p className="mb-3 text-sm font-semibold capitalize">
-                    {formatDateLong(buildDateTime(selectedDateKey, "09:00"))}
-                  </p>
-                  <div className="grid grid-cols-2 gap-3 sm:grid-cols-4">
-                    {SLOT_TIMES.map((slot) => {
-                      const selected = selectedTime === slot;
-                      return (
-                        <button
-                          key={slot}
-                          type="button"
-                          onClick={() => setSelectedTime(slot)}
-                          className={`min-h-12 rounded-xl border text-base font-bold transition-colors active:scale-[0.98] ${
-                            selected
-                              ? "border-[#0F6E56] bg-[#0F6E56] text-white"
-                              : "border-[#C8E6D8] active:border-[#5DCAA5]"
-                          }`}
-                        >
-                          {slot}
-                        </button>
-                      );
-                    })}
-                  </div>
-                </>
+                scheduleLoading ? (
+                  <p className="text-sm text-[#4A6B5E]">{no.common.loading}</p>
+                ) : (
+                  <>
+                    <p className="mb-3 text-sm font-semibold capitalize">
+                      {formatDateLong(buildDateTime(selectedDateKey, "09:00"))}
+                    </p>
+                    {selectedDayInactive ? (
+                      <p className="text-sm text-[#7A9A8E]">Ikke tilgjengelig</p>
+                    ) : availableSlots.length === 0 ? (
+                      <p className="text-sm text-[#7A9A8E]">
+                        Ingen ledige tider denne dagen
+                      </p>
+                    ) : (
+                      <div className="grid grid-cols-2 gap-3 sm:grid-cols-4">
+                        {availableSlots.map((slot) => {
+                          const selected = selectedTime === slot;
+                          return (
+                            <button
+                              key={slot}
+                              type="button"
+                              onClick={() => setSelectedTime(slot)}
+                              className={`min-h-12 rounded-xl border text-base font-bold transition-colors active:scale-[0.98] ${
+                                selected
+                                  ? "border-[#0F6E56] bg-[#0F6E56] text-white"
+                                  : "border-[#C8E6D8] active:border-[#5DCAA5]"
+                              }`}
+                            >
+                              {slot}
+                            </button>
+                          );
+                        })}
+                      </div>
+                    )}
+                  </>
+                )
               ) : (
                 <p className="text-sm text-[#4A6B5E]">{no.booking.selectDateFirst}</p>
               )}
