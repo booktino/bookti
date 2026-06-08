@@ -17,6 +17,7 @@ import {
   type AvailabilityEntry,
   type BookingSlot,
 } from "@/lib/availability";
+import { buildCancelLink } from "@/lib/cancellation";
 import type { Database } from "@/lib/database.types";
 import { createClient } from "@/lib/supabase";
 
@@ -399,7 +400,10 @@ export default function SalonPage() {
       hour: "2-digit",
       minute: "2-digit",
     }).format(startsAt);
-    const smsMessage = `Hei ${clientName.trim()}! Din time hos ${salon.name} er bekreftet: ${dateStr} kl. ${timeStr}. Vi gleder oss til å se deg! - Bookti`;
+    let smsMessage = `Hei ${clientName.trim()}! Din time hos ${salon.name} er bekreftet: ${dateStr} kl. ${timeStr}. Vi gleder oss til å se deg! - Bookti`;
+    if (salon.cancellation_allowed) {
+      smsMessage += ` Avbestill her: ${buildCancelLink(bookingId)}`;
+    }
 
     void fetch("/api/sms/send", {
       method: "POST",

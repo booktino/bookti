@@ -12,6 +12,7 @@ import {
   WEEKDAY_LABELS,
   type AvailabilityEntry,
 } from "@/lib/availability";
+import { CANCELLATION_HOUR_OPTIONS } from "@/lib/cancellation";
 import { PAYMENT_OPTIONS } from "@/lib/payments/methods";
 import { FREE_TRIAL_MONTHS } from "@/lib/pricing/plans";
 
@@ -253,6 +254,12 @@ export default function AdminPage() {
   const [availabilitySaving, setAvailabilitySaving] = useState(false);
   const [availabilityLoading, setAvailabilityLoading] = useState(false);
 
+  const [cancellationAllowed, setCancellationAllowed] = useState(false);
+  const [cancellationHours, setCancellationHours] = useState(24);
+  const [cancellationReasonRequired, setCancellationReasonRequired] = useState(false);
+  const [settingsSaving, setSettingsSaving] = useState(false);
+  const [settingsSaved, setSettingsSaved] = useState(false);
+
   useEffect(() => {
     const id = setInterval(() => setNotifVisible((v) => !v), 2800);
     return () => clearInterval(id);
@@ -310,6 +317,9 @@ export default function AdminPage() {
       const staffRows = staffRes.data ?? [];
 
       setSalon(salonData);
+      setCancellationAllowed(salonData.cancellation_allowed ?? false);
+      setCancellationHours(salonData.cancellation_hours ?? 24);
+      setCancellationReasonRequired(salonData.cancellation_reason_required ?? false);
       setBookings((bookingsRes.data as BookingRow[] | null) ?? []);
       setServices(servicesRes.data ?? []);
       setStaffList(staffRows);
@@ -516,6 +526,32 @@ export default function AdminPage() {
 
     setServiceSaving(false);
     closeServiceModal();
+  }
+
+  async function saveCancellationSettings() {
+    if (!salon) return;
+
+    setSettingsSaving(true);
+    setSettingsSaved(false);
+    const supabase = createClient();
+
+    const { data, error } = await supabase
+      .from("salons")
+      .update({
+        cancellation_allowed: cancellationAllowed,
+        cancellation_hours: cancellationHours,
+        cancellation_reason_required: cancellationReasonRequired,
+      })
+      .eq("id", salon.id)
+      .select()
+      .single();
+
+    if (!error && data) {
+      setSalon(data);
+      setSettingsSaved(true);
+    }
+
+    setSettingsSaving(false);
   }
 
   async function confirmDeleteService() {
@@ -1182,6 +1218,67 @@ export default function AdminPage() {
               </section>
 
               <section className="rounded-xl border border-[#C8E6D8] bg-white p-5 shadow-sm">
+                <h3 className="mb-4 text-sm font-bold text-[#0F6E56]">Avbestillingsregler</h3>
+
+                <label className="flex items-center justify-between gap-4 py-2">
+                  <span className="text-sm font-semibold">Tillat avbestilling</span>
+                  <button
+                    type="button"
+                    role="switch"
+                    aria-checked={cancellationAllowed}
+                    onClick={() => setCancellationAllowed((v) => !v)}
+                    className={`relative h-7 w-12 shrink-0 rounded-full transition-colors ${
+                      cancellationAllowed ? "bg-[#0F6E56]" : "bg-[#C8E6D8]"
+                    }`}
+                  >
+                    <span
+                      className={`absolute top-0.5 left-0.5 h-6 w-6 rounded-full bg-white shadow transition-transform ${
+                        cancellationAllowed ? "translate-x-5" : "translate-x-0"
+                      }`}
+                    />
+                  </button>
+                </label>
+
+                {cancellationAllowed && (
+                  <div className="mt-3">
+                    <label className="text-xs font-bold text-[#7A9A8E]">Frist for avbestilling</label>
+                    <select
+                      value={cancellationHours}
+                      onChange={(e) => setCancellationHours(Number(e.target.value))}
+                      className={inputClass}
+                    >
+                      {CANCELLATION_HOUR_OPTIONS.map((opt) => (
+                        <option key={opt.value} value={opt.value}>
+                          {opt.label}
+                        </option>
+                      ))}
+                    </select>
+                  </div>
+                )}
+
+                {cancellationAllowed && (
+                  <label className="mt-4 flex items-center justify-between gap-4 py-2">
+                    <span className="text-sm font-semibold">Krev begrunnelse</span>
+                    <button
+                      type="button"
+                      role="switch"
+                      aria-checked={cancellationReasonRequired}
+                      onClick={() => setCancellationReasonRequired((v) => !v)}
+                      className={`relative h-7 w-12 shrink-0 rounded-full transition-colors ${
+                        cancellationReasonRequired ? "bg-[#0F6E56]" : "bg-[#C8E6D8]"
+                      }`}
+                    >
+                      <span
+                        className={`absolute top-0.5 left-0.5 h-6 w-6 rounded-full bg-white shadow transition-transform ${
+                          cancellationReasonRequired ? "translate-x-5" : "translate-x-0"
+                        }`}
+                      />
+                    </button>
+                  </label>
+                )}
+              </section>
+
+              <section className="rounded-xl border border-[#C8E6D8] bg-white p-5 shadow-sm">
                 <h3 className="mb-4 text-sm font-bold text-[#0F6E56]">{no.admin.notifications}</h3>
                 {["SMS ved ny booking", "Push-varsler", "E-post kvittering"].map((n) => (
                   <label key={n} className="mb-2 flex items-center gap-3 text-sm">
@@ -1191,9 +1288,19 @@ export default function AdminPage() {
                 ))}
               </section>
 
-              <button className="btn-primary rounded-xl px-6 py-3 text-sm font-bold text-white">
-                {no.admin.save}
-              </button>
+              <div className="flex items-center gap-4">
+                <button
+                  type="button"
+                  onClick={saveCancellationSettings}
+                  disabled={settingsSaving}
+                  className="btn-primary rounded-xl px-6 py-3 text-sm font-bold text-white disabled:opacity-60"
+                >
+                  {settingsSaving ? no.common.loading : no.admin.save}
+                </button>
+                {settingsSaved && (
+                  <span className="text-sm font-semibold text-[#0F6E56]">Lagret!</span>
+                )}
+              </div>
             </div>
           )}
         </div>

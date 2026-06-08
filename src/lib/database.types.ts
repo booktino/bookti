@@ -33,7 +33,9 @@ export interface Database {
           currency: string
           timezone: string
           booking_notice_hours: number
+          cancellation_allowed: boolean
           cancellation_hours: number
+          cancellation_reason_required: boolean
           stripe_customer_id: string | null
           stripe_subscription_id: string | null
           plan: 'trial' | 'pro' | 'cancelled'

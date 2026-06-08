@@ -90,7 +90,9 @@ async function createSalon(
     plan: "trial",
     trial_ends_at: trialEndsAt(),
     booking_notice_hours: 24,
+    cancellation_allowed: false,
     cancellation_hours: 24,
+    cancellation_reason_required: false,
     is_active: true,
   };
 
