@@ -1,9 +1,12 @@
 import { NextResponse } from "next/server";
 import { createClient } from "@supabase/supabase-js";
 import {
-  canCancelBooking,
+  buildRefundSmsSuffix,
+  calculateRefundStatus,
+  canCancelOnline,
   formatBookingDate,
   formatBookingTime,
+  type SalonCancellationPolicy,
 } from "@/lib/cancellation";
 import { sendTwilioSms } from "@/lib/notifications/twilio";
 
@@ -36,7 +39,9 @@ export async function POST(request: Request) {
 
   const { data: booking, error: bookingError } = await supabase
     .from("bookings")
-    .select("*, salons(name, phone, cancellation_allowed, cancellation_hours, cancellation_reason_required)")
+    .select(
+      "*, salons(name, phone, cancellation_allowed, cancellation_hours, cancellation_reason_required, cancellation_fee_enabled, cancellation_refund_hours, cancellation_fee_type, cancellation_fee_amount)",
+    )
     .eq("id", booking_id)
     .single();
 
@@ -50,6 +55,10 @@ export async function POST(request: Request) {
     cancellation_allowed: boolean;
     cancellation_hours: number;
     cancellation_reason_required: boolean;
+    cancellation_fee_enabled: boolean;
+    cancellation_refund_hours: number;
+    cancellation_fee_type: SalonCancellationPolicy["cancellation_fee_type"];
+    cancellation_fee_amount: number | null;
   } | null;
 
   if (!salon) {
@@ -60,11 +69,20 @@ export async function POST(request: Request) {
     return NextResponse.json({ error: "already_cancelled" }, { status: 409 });
   }
 
+  const policy: SalonCancellationPolicy = {
+    cancellation_allowed: salon.cancellation_allowed,
+    cancellation_hours: salon.cancellation_hours,
+    cancellation_fee_enabled: salon.cancellation_fee_enabled,
+    cancellation_refund_hours: salon.cancellation_refund_hours,
+    cancellation_fee_type: salon.cancellation_fee_type,
+    cancellation_fee_amount: salon.cancellation_fee_amount,
+  };
+
   if (!salon.cancellation_allowed) {
     return NextResponse.json({ error: "cancellation_not_allowed" }, { status: 403 });
   }
 
-  if (!canCancelBooking(booking.starts_at, salon.cancellation_hours)) {
+  if (!canCancelOnline(policy, booking.starts_at)) {
     return NextResponse.json({ error: "deadline_passed" }, { status: 403 });
   }
 
@@ -72,11 +90,14 @@ export async function POST(request: Request) {
     return NextResponse.json({ error: "reason_required" }, { status: 400 });
   }
 
+  const refundStatus = calculateRefundStatus(policy, booking.starts_at);
+
   const { error: updateError } = await supabase
     .from("bookings")
     .update({
       status: "cancelled",
       cancellation_reason: reason?.trim() || null,
+      refund_status: refundStatus,
     })
     .eq("id", booking_id);
 
@@ -90,9 +111,11 @@ export async function POST(request: Request) {
     ? booking.client_phone
     : `+47${booking.client_phone.replace(/\D/g, "")}`;
 
+  const refundSuffix = buildRefundSmsSuffix(refundStatus);
+
   await sendTwilioSms({
     to: clientPhone,
-    message: `Din time hos ${salon.name} ${dateStr} kl. ${timeStr} er avbestilt.`,
+    message: `Din time hos ${salon.name} ${dateStr} kl. ${timeStr} er avbestilt.${refundSuffix}`,
     bookingId: booking_id,
     salonId: booking.salon_id,
     type: "cancellation",
@@ -105,12 +128,12 @@ export async function POST(request: Request) {
 
     await sendTwilioSms({
       to: ownerPhone,
-      message: `Avbestilling: ${booking.client_name} har avbestilt timen ${dateStr} kl. ${timeStr}`,
+      message: `Avbestilling: ${booking.client_name} har avbestilt timen ${dateStr} kl. ${timeStr} (refusjon: ${refundStatus}).`,
       bookingId: booking_id,
       salonId: booking.salon_id,
       type: "cancellation",
     });
   }
 
-  return NextResponse.json({ success: true });
+  return NextResponse.json({ success: true, refund_status: refundStatus });
 }

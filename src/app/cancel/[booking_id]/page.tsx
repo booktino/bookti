@@ -4,9 +4,13 @@ import { useParams } from "next/navigation";
 import { useEffect, useMemo, useState } from "react";
 import { Logo } from "@/components/Logo";
 import {
-  canCancelBooking,
+  canCancelOnline,
   formatBookingDate,
   formatBookingTime,
+  formatFeeRetentionAmount,
+  getRefundDeadlineHours,
+  isBeforeRefundDeadline,
+  type CancellationFeeType,
 } from "@/lib/cancellation";
 import type { Database } from "@/lib/database.types";
 import { createClient } from "@/lib/supabase";
@@ -14,7 +18,14 @@ import { createClient } from "@/lib/supabase";
 type Booking = Database["public"]["Tables"]["bookings"]["Row"];
 type Salon = Pick<
   Database["public"]["Tables"]["salons"]["Row"],
-  "name" | "cancellation_allowed" | "cancellation_hours" | "cancellation_reason_required"
+  | "name"
+  | "cancellation_allowed"
+  | "cancellation_hours"
+  | "cancellation_reason_required"
+  | "cancellation_fee_enabled"
+  | "cancellation_refund_hours"
+  | "cancellation_fee_type"
+  | "cancellation_fee_amount"
 >;
 type Service = Pick<Database["public"]["Tables"]["services"]["Row"], "name">;
 
@@ -30,6 +41,7 @@ type PageState =
   | "not_allowed"
   | "deadline_passed"
   | "ready"
+  | "ready_late"
   | "success";
 
 const inputClass =
@@ -44,6 +56,9 @@ export default function CancelBookingPage() {
   const [reason, setReason] = useState("");
   const [cancelling, setCancelling] = useState(false);
   const [error, setError] = useState<string | null>(null);
+  const [cancelledRefundStatus, setCancelledRefundStatus] = useState<
+    Database["public"]["Tables"]["bookings"]["Row"]["refund_status"]
+  >(null);
 
   useEffect(() => {
     if (!bookingId) return;
@@ -51,7 +66,9 @@ export default function CancelBookingPage() {
     async function loadBooking() {
       const { data, error: fetchError } = await supabase
         .from("bookings")
-        .select("*, salons(name, cancellation_allowed, cancellation_hours, cancellation_reason_required), services(name)")
+        .select(
+          "*, salons(name, cancellation_allowed, cancellation_hours, cancellation_reason_required, cancellation_fee_enabled, cancellation_refund_hours, cancellation_fee_type, cancellation_fee_amount), services(name)",
+        )
         .eq("id", bookingId)
         .maybeSingle();
 
@@ -74,8 +91,27 @@ export default function CancelBookingPage() {
         return;
       }
 
-      if (!canCancelBooking(row.starts_at, salon.cancellation_hours)) {
+      const policy = {
+        cancellation_allowed: salon.cancellation_allowed,
+        cancellation_hours: salon.cancellation_hours,
+        cancellation_fee_enabled: salon.cancellation_fee_enabled,
+        cancellation_refund_hours: salon.cancellation_refund_hours,
+        cancellation_fee_type: salon.cancellation_fee_type,
+        cancellation_fee_amount: salon.cancellation_fee_amount,
+      };
+
+      if (!canCancelOnline(policy, row.starts_at)) {
         setPageState("deadline_passed");
+        return;
+      }
+
+      const refundHours = getRefundDeadlineHours(policy);
+      if (
+        salon.cancellation_fee_enabled &&
+        salon.cancellation_fee_type &&
+        !isBeforeRefundDeadline(row.starts_at, refundHours)
+      ) {
+        setPageState("ready_late");
         return;
       }
 
@@ -106,7 +142,7 @@ export default function CancelBookingPage() {
         }),
       });
 
-      const data = (await res.json()) as { error?: string };
+      const data = (await res.json()) as { error?: string; refund_status?: typeof cancelledRefundStatus };
 
       if (!res.ok) {
         if (data.error === "already_cancelled") {
@@ -121,6 +157,7 @@ export default function CancelBookingPage() {
         return;
       }
 
+      setCancelledRefundStatus(data.refund_status ?? null);
       setPageState("success");
     } catch {
       setError("Noe gikk galt. Prøv igjen.");
@@ -128,6 +165,14 @@ export default function CancelBookingPage() {
       setCancelling(false);
     }
   }
+
+  const salon = booking?.salons;
+  const feeType = salon?.cancellation_fee_type as CancellationFeeType | null;
+
+  const feeAmountText =
+    feeType && salon
+      ? formatFeeRetentionAmount(feeType, salon.cancellation_fee_amount)
+      : "";
 
   return (
     <div className="flex min-h-screen flex-col bg-[#EFF8F4] font-sans text-[#0D3B2E]">
@@ -194,22 +239,42 @@ export default function CancelBookingPage() {
               </div>
               <h1 className="text-xl font-bold text-[#0F6E56]">Time avbestilt</h1>
               <p className="mt-2 text-sm text-[#4A6B5E]">
-                Din time er avbestilt. Vi håper å se deg igjen snart!
+                Din time er avbestilt.
+                {cancelledRefundStatus === "full" &&
+                  " Du vil motta full refusjon innen 5-10 virkedager."}
+                {cancelledRefundStatus === "partial" &&
+                  " Delvis refusjon behandles innen 5-10 virkedager i henhold til avbestillingsvilkårene."}
+                {cancelledRefundStatus === "none" &&
+                  " Ingen refusjon i henhold til avbestillingsvilkårene."}
+                {!cancelledRefundStatus && " Vi håper å se deg igjen snart!"}
               </p>
             </>
           )}
 
-          {pageState === "ready" && booking && (
+          {(pageState === "ready" || pageState === "ready_late") && booking && salon && (
             <>
               <h1 className="text-xl font-bold text-[#0F6E56]">Avbestill time</h1>
               <p className="mt-2 text-sm text-[#4A6B5E]">
                 Er du sikker på at du vil avbestille denne timen?
               </p>
 
+              {pageState === "ready" && (
+                <div className="mt-4 rounded-xl border border-[#C8E6D8] bg-[#f0faf6] p-4 text-sm text-[#4A6B5E]">
+                  Du vil motta full refusjon innen 5-10 virkedager.
+                </div>
+              )}
+
+              {pageState === "ready_late" && feeType && (
+                <div className="mt-4 rounded-xl border border-[#fde68a] bg-[#fffbeb] p-4 text-sm text-[#92400e]">
+                  OBS: Avbestillingsfristen er passert. I henhold til {salon.name}s vilkår vil{" "}
+                  {feeAmountText} av beløpet bli beholdt.
+                </div>
+              )}
+
               <div className="mt-6 space-y-3 rounded-xl border border-[#C8E6D8] bg-[#f0faf6] p-4 text-sm">
                 <div>
                   <span className="text-xs font-bold text-[#7A9A8E]">Salong</span>
-                  <p className="font-semibold">{booking.salons?.name ?? "—"}</p>
+                  <p className="font-semibold">{salon.name ?? "—"}</p>
                 </div>
                 {booking.services?.name && (
                   <div>
@@ -230,7 +295,7 @@ export default function CancelBookingPage() {
                 </div>
               </div>
 
-              {booking.salons?.cancellation_reason_required && (
+              {salon.cancellation_reason_required && (
                 <div className="mt-4">
                   <label className="text-xs font-bold text-[#7A9A8E]">
                     Begrunnelse for avbestilling
@@ -251,9 +316,17 @@ export default function CancelBookingPage() {
                 type="button"
                 onClick={handleCancel}
                 disabled={cancelling}
-                className="mt-6 min-h-12 w-full rounded-xl bg-[#dc2626] py-3.5 text-base font-bold text-white active:opacity-90 disabled:opacity-60"
+                className={`mt-6 min-h-12 w-full rounded-xl py-3.5 text-base font-bold text-white active:opacity-90 disabled:opacity-60 ${
+                  pageState === "ready_late"
+                    ? "bg-[#9ca3af] hover:bg-[#6b7280]"
+                    : "bg-[#dc2626]"
+                }`}
               >
-                {cancelling ? "Avbestiller…" : "Avbestill time"}
+                {cancelling
+                  ? "Avbestiller…"
+                  : pageState === "ready_late"
+                    ? "Avbestill likevel"
+                    : "Avbestill time"}
               </button>
             </>
           )}

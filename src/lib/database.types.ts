@@ -36,6 +36,10 @@ export interface Database {
           cancellation_allowed: boolean
           cancellation_hours: number
           cancellation_reason_required: boolean
+          cancellation_fee_enabled: boolean
+          cancellation_refund_hours: number
+          cancellation_fee_type: 'percent_50' | 'percent_100' | 'fixed' | null
+          cancellation_fee_amount: number | null
           stripe_customer_id: string | null
           stripe_subscription_id: string | null
           plan: 'trial' | 'pro' | 'cancelled'
@@ -101,6 +105,7 @@ export interface Database {
           sms_confirmation_sent: boolean
           sms_reminder_sent: boolean
           cancellation_reason: string | null
+          refund_status: 'full' | 'partial' | 'none' | 'pending' | null
           created_at: string
           updated_at: string
         }

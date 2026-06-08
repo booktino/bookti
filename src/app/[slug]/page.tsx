@@ -17,7 +17,11 @@ import {
   type AvailabilityEntry,
   type BookingSlot,
 } from "@/lib/availability";
-import { buildCancelLink } from "@/lib/cancellation";
+import {
+  buildCancelLink,
+  formatFeeRetentionText,
+  getRefundDeadlineHours,
+} from "@/lib/cancellation";
 import type { Database } from "@/lib/database.types";
 import { createClient } from "@/lib/supabase";
 
@@ -148,6 +152,7 @@ export default function SalonPage() {
   const [submitError, setSubmitError] = useState(false);
   const [confirmed, setConfirmed] = useState<ConfirmedBooking | null>(null);
   const [paymentReturn, setPaymentReturn] = useState<"success" | "cancelled" | null>(null);
+  const [cancellationTermsAccepted, setCancellationTermsAccepted] = useState(false);
   const [staffAvailability, setStaffAvailability] = useState<AvailabilityEntry[]>(
     defaultWeekSchedule(),
   );
@@ -304,6 +309,13 @@ export default function SalonPage() {
   const selectedStaff = staffList.find((s) => s.id === selectedStaffId) ?? null;
   const phoneValid = clientPhone.replace(/\D/g, "").length === 8;
   const detailsValid = clientName.trim().length >= 2 && phoneValid;
+  const showCancellationPolicy =
+    salon?.cancellation_allowed ||
+    (salon?.cancellation_fee_enabled && salon.cancellation_fee_type);
+  const requiresCancellationTerms =
+    salon?.cancellation_allowed || salon?.cancellation_fee_enabled;
+  const canConfirm =
+    detailsValid && (!requiresCancellationTerms || cancellationTermsAccepted);
   const calendarDays = useMemo(() => getCalendarDays(calendarMonth), [calendarMonth]);
 
   const durationMin = selectedService?.duration_min ?? 60;
@@ -418,7 +430,7 @@ export default function SalonPage() {
   }
 
   const prepareWalletBooking = async (): Promise<string | null> => {
-    if (!detailsValid) return null;
+    if (!canConfirm) return null;
     setSubmitting(true);
     setSubmitError(false);
 
@@ -440,7 +452,7 @@ export default function SalonPage() {
   };
 
   async function handleConfirm() {
-    if (!salon || !selectedService || !selectedDateKey || !selectedTime || !detailsValid) return;
+    if (!salon || !selectedService || !selectedDateKey || !selectedTime || !canConfirm) return;
     if (paymentMethod === "wallet") return;
 
     setSubmitting(true);
@@ -973,6 +985,50 @@ export default function SalonPage() {
               {submitError && (
                 <p className="mt-3 text-center text-sm text-red-600">{no.common.error}</p>
               )}
+
+              {showCancellationPolicy && salon && (
+                <div className="mt-6 space-y-3 rounded-xl border border-[#C8E6D8] bg-[#f0faf6] p-4 text-sm">
+                  <p className="text-xs font-bold tracking-widest text-[#7A9A8E] uppercase">
+                    Avbestillingsvilkår
+                  </p>
+                  {salon.cancellation_allowed && (
+                    <p className="text-[#4A6B5E]">
+                      ✓ Gratis avbestilling inntil{" "}
+                      {getRefundDeadlineHours({
+                        cancellation_allowed: salon.cancellation_allowed,
+                        cancellation_hours: salon.cancellation_hours,
+                        cancellation_fee_enabled: salon.cancellation_fee_enabled,
+                        cancellation_refund_hours: salon.cancellation_refund_hours,
+                        cancellation_fee_type: salon.cancellation_fee_type,
+                        cancellation_fee_amount: salon.cancellation_fee_amount,
+                      })}{" "}
+                      timer før timen
+                    </p>
+                  )}
+                  {salon.cancellation_fee_enabled && salon.cancellation_fee_type && (
+                    <p className="text-[#92400e]">
+                      ⚠️{" "}
+                      {formatFeeRetentionText(
+                        salon.name,
+                        salon.cancellation_refund_hours,
+                        salon.cancellation_fee_type,
+                        salon.cancellation_fee_amount,
+                      )}
+                    </p>
+                  )}
+                  <label className="flex cursor-pointer items-start gap-3 pt-1">
+                    <input
+                      type="checkbox"
+                      checked={cancellationTermsAccepted}
+                      onChange={(e) => setCancellationTermsAccepted(e.target.checked)}
+                      className="mt-0.5 accent-[#0F6E56]"
+                    />
+                    <span className="text-sm font-semibold text-[#1a3d30]">
+                      Jeg har lest og godtar avbestillingsvilkårene
+                    </span>
+                  </label>
+                </div>
+              )}
             </>
           )}
         </div>
@@ -1021,7 +1077,7 @@ export default function SalonPage() {
                 serviceName={selectedService?.name ?? "Time"}
                 salonId={salon.id}
                 slug={slug}
-                disabled={!detailsValid || submitting}
+                disabled={!canConfirm || submitting}
                 onPrepareBooking={prepareWalletBooking}
                 onSuccess={handleWalletSuccess}
                 onError={() => setSubmitError(true)}
@@ -1029,7 +1085,7 @@ export default function SalonPage() {
             ) : (
               <button
                 onClick={handleConfirm}
-                disabled={!detailsValid || submitting}
+                disabled={!canConfirm || submitting}
                 className={`${btnPrimary} disabled:opacity-40`}
               >
                 {submitting

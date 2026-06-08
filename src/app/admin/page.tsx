@@ -12,7 +12,11 @@ import {
   WEEKDAY_LABELS,
   type AvailabilityEntry,
 } from "@/lib/availability";
-import { CANCELLATION_HOUR_OPTIONS } from "@/lib/cancellation";
+import {
+  CANCELLATION_FEE_OPTIONS,
+  CANCELLATION_HOUR_OPTIONS,
+  type CancellationFeeType,
+} from "@/lib/cancellation";
 import { PAYMENT_OPTIONS } from "@/lib/payments/methods";
 import { FREE_TRIAL_MONTHS } from "@/lib/pricing/plans";
 
@@ -257,6 +261,11 @@ export default function AdminPage() {
   const [cancellationAllowed, setCancellationAllowed] = useState(false);
   const [cancellationHours, setCancellationHours] = useState(24);
   const [cancellationReasonRequired, setCancellationReasonRequired] = useState(false);
+  const [cancellationFeeEnabled, setCancellationFeeEnabled] = useState(false);
+  const [cancellationRefundHours, setCancellationRefundHours] = useState(24);
+  const [cancellationFeeType, setCancellationFeeType] =
+    useState<CancellationFeeType>("percent_50");
+  const [cancellationFeeAmount, setCancellationFeeAmount] = useState("");
   const [settingsSaving, setSettingsSaving] = useState(false);
   const [settingsSaved, setSettingsSaved] = useState(false);
 
@@ -320,6 +329,14 @@ export default function AdminPage() {
       setCancellationAllowed(salonData.cancellation_allowed ?? false);
       setCancellationHours(salonData.cancellation_hours ?? 24);
       setCancellationReasonRequired(salonData.cancellation_reason_required ?? false);
+      setCancellationFeeEnabled(salonData.cancellation_fee_enabled ?? false);
+      setCancellationRefundHours(salonData.cancellation_refund_hours ?? 24);
+      setCancellationFeeType(salonData.cancellation_fee_type ?? "percent_50");
+      setCancellationFeeAmount(
+        salonData.cancellation_fee_amount != null
+          ? String(salonData.cancellation_fee_amount)
+          : "",
+      );
       setBookings((bookingsRes.data as BookingRow[] | null) ?? []);
       setServices(servicesRes.data ?? []);
       setStaffList(staffRows);
@@ -535,12 +552,21 @@ export default function AdminPage() {
     setSettingsSaved(false);
     const supabase = createClient();
 
+    const feeAmount =
+      cancellationFeeEnabled && cancellationFeeType === "fixed"
+        ? Math.max(0, parseInt(cancellationFeeAmount, 10) || 0)
+        : null;
+
     const { data, error } = await supabase
       .from("salons")
       .update({
         cancellation_allowed: cancellationAllowed,
         cancellation_hours: cancellationHours,
         cancellation_reason_required: cancellationReasonRequired,
+        cancellation_fee_enabled: cancellationFeeEnabled,
+        cancellation_refund_hours: cancellationRefundHours,
+        cancellation_fee_type: cancellationFeeEnabled ? cancellationFeeType : null,
+        cancellation_fee_amount: feeAmount,
       })
       .eq("id", salon.id)
       .select()
@@ -1275,6 +1301,80 @@ export default function AdminPage() {
                       />
                     </button>
                   </label>
+                )}
+
+                <label className="mt-4 flex items-center justify-between gap-4 border-t border-[#C8E6D8] pt-4">
+                  <span className="text-sm font-semibold">Behold betaling ved sen avbestilling</span>
+                  <button
+                    type="button"
+                    role="switch"
+                    aria-checked={cancellationFeeEnabled}
+                    onClick={() => setCancellationFeeEnabled((v) => !v)}
+                    className={`relative h-7 w-12 shrink-0 rounded-full transition-colors ${
+                      cancellationFeeEnabled ? "bg-[#0F6E56]" : "bg-[#C8E6D8]"
+                    }`}
+                  >
+                    <span
+                      className={`absolute top-0.5 left-0.5 h-6 w-6 rounded-full bg-white shadow transition-transform ${
+                        cancellationFeeEnabled ? "translate-x-5" : "translate-x-0"
+                      }`}
+                    />
+                  </button>
+                </label>
+
+                {cancellationFeeEnabled && (
+                  <div className="mt-3 space-y-4">
+                    <div>
+                      <label className="text-xs font-bold text-[#7A9A8E]">Frist for full refusjon</label>
+                      <select
+                        value={cancellationRefundHours}
+                        onChange={(e) => setCancellationRefundHours(Number(e.target.value))}
+                        className={inputClass}
+                      >
+                        {CANCELLATION_HOUR_OPTIONS.map((opt) => (
+                          <option key={opt.value} value={opt.value}>
+                            {opt.label}
+                          </option>
+                        ))}
+                      </select>
+                    </div>
+
+                    <div>
+                      <label className="text-xs font-bold text-[#7A9A8E]">Gebyr ved sen avbestilling</label>
+                      <div className="mt-2 space-y-2">
+                        {CANCELLATION_FEE_OPTIONS.map((opt) => (
+                          <label
+                            key={opt.value}
+                            className="flex cursor-pointer items-center gap-3 rounded-lg border border-[#C8E6D8] px-4 py-3 text-sm"
+                          >
+                            <input
+                              type="radio"
+                              name="cancellation_fee_type"
+                              value={opt.value}
+                              checked={cancellationFeeType === opt.value}
+                              onChange={() => setCancellationFeeType(opt.value)}
+                              className="accent-[#0F6E56]"
+                            />
+                            <span className="font-semibold">{opt.label}</span>
+                          </label>
+                        ))}
+                      </div>
+
+                      {cancellationFeeType === "fixed" && (
+                        <div className="mt-3">
+                          <label className="text-xs font-bold text-[#7A9A8E]">Beløp (NOK)</label>
+                          <input
+                            type="number"
+                            min={0}
+                            value={cancellationFeeAmount}
+                            onChange={(e) => setCancellationFeeAmount(e.target.value)}
+                            placeholder="0"
+                            className={inputClass}
+                          />
+                        </div>
+                      )}
+                    </div>
+                  </div>
                 )}
               </section>
 
