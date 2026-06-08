@@ -653,17 +653,20 @@ export default function AdminPage() {
     setAvailabilitySaving(true);
     const supabase = createClient();
 
-    const rows = availabilityForm.map((row) => ({
-      staff_id: availabilityStaff.id,
-      day_of_week: row.day_of_week,
-      start_time: row.start_time,
-      end_time: row.end_time,
-      is_active: row.is_active,
-    }));
+    const staffId = availabilityStaff.id;
 
     const { error } = await supabase
       .from("availability")
-      .upsert(rows, { onConflict: "staff_id,day_of_week" });
+      .upsert(
+        availabilityForm.map((day) => ({
+          staff_id: staffId,
+          day_of_week: day.day_of_week,
+          start_time: day.start_time,
+          end_time: day.end_time,
+          is_active: day.is_active,
+        })),
+        { onConflict: "staff_id,day_of_week" },
+      );
 
     setAvailabilitySaving(false);
     if (!error) closeAvailabilityModal();
