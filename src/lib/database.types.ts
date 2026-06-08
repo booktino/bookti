@@ -125,6 +125,19 @@ export interface Database {
         Insert: Omit<Database['public']['Tables']['availability']['Row'], 'id' | 'created_at'>
         Update: Partial<Database['public']['Tables']['availability']['Insert']>
       }
+      salon_hours: {
+        Row: {
+          id: string
+          salon_id: string
+          day_of_week: number
+          start_time: string
+          end_time: string
+          is_active: boolean
+          created_at: string
+        }
+        Insert: Omit<Database['public']['Tables']['salon_hours']['Row'], 'id' | 'created_at'>
+        Update: Partial<Database['public']['Tables']['salon_hours']['Insert']>
+      }
       sms_logs: {
         Row: {
           id: string

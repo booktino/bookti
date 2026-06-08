@@ -21,6 +21,7 @@ import { PAYMENT_OPTIONS } from "@/lib/payments/methods";
 import { FREE_TRIAL_MONTHS } from "@/lib/pricing/plans";
 
 type AdminTab = "calendar" | "services" | "staff" | "clients" | "invoices" | "settings";
+type SettingsSubTab = "bedrift" | "apningstider" | "avbestilling" | "varsler" | "abonnement";
 
 type Salon = Database["public"]["Tables"]["salons"]["Row"];
 type Service = Database["public"]["Tables"]["services"]["Row"];
@@ -65,6 +66,16 @@ type StaffForm = {
   title: string;
   phone: string;
   is_active: boolean;
+};
+
+type BusinessForm = {
+  name: string;
+  address: string;
+  city: string;
+  phone: string;
+  email: string;
+  description: string;
+  logo_url: string;
 };
 
 const EMPTY_SERVICE_FORM: ServiceForm = {
@@ -190,6 +201,18 @@ function formatDateShort(iso: string) {
   return `${d.getDate()}. ${NORWEGIAN_MONTHS[d.getMonth()].slice(0, 3)}`;
 }
 
+function getTrialDaysLeft(trialEndsAt: string): number {
+  const end = new Date(trialEndsAt);
+  const now = new Date();
+  return Math.max(0, Math.ceil((end.getTime() - now.getTime()) / (1000 * 60 * 60 * 24)));
+}
+
+const PLAN_LABELS: Record<Salon["plan"], string> = {
+  trial: "Prøveperiode",
+  pro: "Pro",
+  cancelled: "Kansellert",
+};
+
 const STATUS_STYLES: Record<CalendarBookingStatus, string> = {
   kommende: "bg-[#5DCAA5] text-white",
   ferdig: "bg-[#e2f5ee] text-[#0F6E56]",
@@ -201,6 +224,14 @@ const STATUS_LABELS: Record<CalendarBookingStatus, string> = {
   ferdig: "Ferdig",
   kansellert: "Kansellert",
 };
+
+const SETTINGS_TABS: { id: SettingsSubTab; label: string }[] = [
+  { id: "bedrift", label: "Bedrift" },
+  { id: "apningstider", label: "Åpningstider" },
+  { id: "avbestilling", label: "Avbestilling" },
+  { id: "varsler", label: "Varsler" },
+  { id: "abonnement", label: "Abonnement" },
+];
 
 const TABS: { id: AdminTab; label: string; icon: string }[] = [
   { id: "calendar", label: no.admin.calendar, icon: "📅" },
@@ -266,6 +297,25 @@ export default function AdminPage() {
   const [cancellationFeeType, setCancellationFeeType] =
     useState<CancellationFeeType>("percent_50");
   const [cancellationFeeAmount, setCancellationFeeAmount] = useState("");
+  const [settingsTab, setSettingsTab] = useState<SettingsSubTab>("bedrift");
+  const [businessForm, setBusinessForm] = useState<BusinessForm>({
+    name: "",
+    address: "",
+    city: "",
+    phone: "",
+    email: "",
+    description: "",
+    logo_url: "",
+  });
+  const [businessSaving, setBusinessSaving] = useState(false);
+  const [businessSaved, setBusinessSaved] = useState(false);
+  const [salonHoursForm, setSalonHoursForm] = useState<AvailabilityEntry[]>(
+    defaultWeekSchedule(),
+  );
+  const [salonHoursSaving, setSalonHoursSaving] = useState(false);
+  const [salonHoursSaved, setSalonHoursSaved] = useState(false);
+  const [upgrading, setUpgrading] = useState(false);
+  const [upgradeError, setUpgradeError] = useState(false);
   const [settingsSaving, setSettingsSaving] = useState(false);
   const [settingsSaved, setSettingsSaved] = useState(false);
 
@@ -304,7 +354,7 @@ export default function AdminPage() {
         return;
       }
 
-      const [bookingsRes, servicesRes, staffRes] = await Promise.all([
+      const [bookingsRes, servicesRes, staffRes, salonHoursRes] = await Promise.all([
         supabase
           .from("bookings")
           .select("*, staff(name), services(name)")
@@ -319,6 +369,10 @@ export default function AdminPage() {
           .select("*")
           .eq("salon_id", salonData.id)
           .order("display_order"),
+        supabase
+          .from("salon_hours")
+          .select("day_of_week, start_time, end_time, is_active")
+          .eq("salon_id", salonData.id),
       ]);
 
       if (cancelled) return;
@@ -326,6 +380,21 @@ export default function AdminPage() {
       const staffRows = staffRes.data ?? [];
 
       setSalon(salonData);
+      setBusinessForm({
+        name: salonData.name,
+        address: salonData.address ?? "",
+        city: salonData.city,
+        phone: salonData.phone ?? "",
+        email: salonData.email ?? "",
+        description: salonData.description ?? "",
+        logo_url: salonData.logo_url ?? "",
+      });
+      const hoursRows = salonHoursRes.data ?? [];
+      if (hoursRows.length > 0) {
+        setSalonHoursForm(mergeWithDefaults(hoursRows));
+      } else {
+        setSalonHoursForm(defaultWeekSchedule());
+      }
       setCancellationAllowed(salonData.cancellation_allowed ?? false);
       setCancellationHours(salonData.cancellation_hours ?? 24);
       setCancellationReasonRequired(salonData.cancellation_reason_required ?? false);
@@ -578,6 +647,98 @@ export default function AdminPage() {
     }
 
     setSettingsSaving(false);
+  }
+
+  async function saveBusinessSettings(e?: React.FormEvent) {
+    e?.preventDefault();
+    if (!salon || !businessForm.name.trim()) return;
+
+    setBusinessSaving(true);
+    setBusinessSaved(false);
+    const supabase = createClient();
+
+    const { data, error } = await supabase
+      .from("salons")
+      .update({
+        name: businessForm.name.trim(),
+        address: businessForm.address.trim() || null,
+        city: businessForm.city.trim() || salon.city,
+        phone: businessForm.phone.trim() || null,
+        email: businessForm.email.trim() || null,
+        description: businessForm.description.trim() || null,
+        logo_url: businessForm.logo_url.trim() || null,
+      })
+      .eq("id", salon.id)
+      .select()
+      .single();
+
+    if (!error && data) {
+      setSalon(data);
+      setBusinessSaved(true);
+    }
+
+    setBusinessSaving(false);
+  }
+
+  function updateSalonHoursDay(
+    dayOfWeek: number,
+    patch: Partial<Pick<AvailabilityEntry, "start_time" | "end_time" | "is_active">>,
+  ) {
+    setSalonHoursForm((prev) =>
+      prev.map((row) => (row.day_of_week === dayOfWeek ? { ...row, ...patch } : row)),
+    );
+  }
+
+  async function saveSalonHours(e?: React.FormEvent) {
+    e?.preventDefault();
+    if (!salon) return;
+
+    setSalonHoursSaving(true);
+    setSalonHoursSaved(false);
+    const supabase = createClient();
+
+    const rows = salonHoursForm.map((row) => ({
+      salon_id: salon.id,
+      day_of_week: row.day_of_week,
+      start_time: row.start_time,
+      end_time: row.end_time,
+      is_active: row.is_active,
+    }));
+
+    const { error } = await supabase
+      .from("salon_hours")
+      .upsert(rows, { onConflict: "salon_id,day_of_week" });
+
+    if (!error) setSalonHoursSaved(true);
+
+    setSalonHoursSaving(false);
+  }
+
+  async function handleUpgrade() {
+    if (!salon) return;
+
+    setUpgrading(true);
+    setUpgradeError(false);
+
+    try {
+      const res = await fetch("/api/stripe/subscription", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ salon_id: salon.id }),
+      });
+
+      const data = (await res.json()) as { url?: string };
+      if (!res.ok || !data.url) {
+        setUpgradeError(true);
+        setUpgrading(false);
+        return;
+      }
+
+      window.location.href = data.url;
+    } catch {
+      setUpgradeError(true);
+      setUpgrading(false);
+    }
   }
 
   async function confirmDeleteService() {
@@ -1203,204 +1364,451 @@ export default function AdminPage() {
           )}
 
           {tab === "settings" && (
-            <div className="max-w-lg space-y-6">
-              <section className="rounded-xl border border-[#C8E6D8] bg-white p-5 shadow-sm">
-                <h3 className="mb-4 text-sm font-bold text-[#0F6E56]">{no.admin.businessSettings}</h3>
-                {[
-                  { label: "Bedriftsnavn", value: salon.name },
-                  { label: "E-post", value: salon.email ?? "—" },
-                  { label: "Telefon", value: salon.phone ?? "—" },
-                  {
-                    label: "Adresse",
-                    value: [salon.address, salon.city].filter(Boolean).join(", ") || "—",
-                  },
-                ].map(({ label, value }) => (
-                  <div key={label} className="mb-3">
-                    <label className="text-xs font-bold text-[#7A9A8E]">{label}</label>
-                    <input
-                      readOnly
-                      value={value}
-                      className="mt-1 w-full rounded-lg border border-[#C8E6D8] bg-[#f0faf6] px-3 py-2 text-sm"
-                    />
-                  </div>
-                ))}
-              </section>
-
-              <section className="rounded-xl border border-[#C8E6D8] bg-white p-5 shadow-sm">
-                <h3 className="mb-4 text-sm font-bold text-[#0F6E56]">Betalingsmetoder</h3>
-                <div className="space-y-2">
-                  {PAYMENT_OPTIONS.map((opt) => (
-                    <label key={opt.id} className="flex items-center gap-3 rounded-lg border border-[#C8E6D8] px-4 py-3 text-sm">
-                      <input type="checkbox" defaultChecked className="accent-[#0F6E56]" />
-                      <span className="font-semibold">{opt.label}</span>
-                      <span className="text-xs text-[#7A9A8E]">{opt.description}</span>
-                    </label>
-                  ))}
-                </div>
-                <p className="mt-3 text-xs text-[#7A9A8E]">
-                  Plan: {salon.plan}
-                  {salon.stripe_customer_id ? ` · Stripe: ${salon.stripe_customer_id}` : ""}
-                </p>
-              </section>
-
-              <section className="rounded-xl border border-[#C8E6D8] bg-white p-5 shadow-sm">
-                <h3 className="mb-4 text-sm font-bold text-[#0F6E56]">Avbestillingsregler</h3>
-
-                <label className="flex items-center justify-between gap-4 py-2">
-                  <span className="text-sm font-semibold">Tillat avbestilling</span>
+            <div className="max-w-2xl">
+              <div className="mb-6 flex flex-wrap gap-1">
+                {SETTINGS_TABS.map((st) => (
                   <button
+                    key={st.id}
                     type="button"
-                    role="switch"
-                    aria-checked={cancellationAllowed}
-                    onClick={() => setCancellationAllowed((v) => !v)}
-                    className={`relative h-7 w-12 shrink-0 rounded-full transition-colors ${
-                      cancellationAllowed ? "bg-[#0F6E56]" : "bg-[#C8E6D8]"
+                    onClick={() => setSettingsTab(st.id)}
+                    className={`rounded-lg px-4 py-2 text-sm font-semibold transition-colors ${
+                      settingsTab === st.id
+                        ? "bg-[#0F6E56] text-white"
+                        : "bg-[#e8e8e8] text-[#0D3B2E] hover:bg-[#d8d8d8]"
                     }`}
                   >
-                    <span
-                      className={`absolute top-0.5 left-0.5 h-6 w-6 rounded-full bg-white shadow transition-transform ${
-                        cancellationAllowed ? "translate-x-5" : "translate-x-0"
-                      }`}
-                    />
+                    {st.label}
                   </button>
-                </label>
+                ))}
+              </div>
 
-                {cancellationAllowed && (
-                  <div className="mt-3">
-                    <label className="text-xs font-bold text-[#7A9A8E]">Frist for avbestilling</label>
-                    <select
-                      value={cancellationHours}
-                      onChange={(e) => setCancellationHours(Number(e.target.value))}
-                      className={inputClass}
+              {settingsTab === "bedrift" && (
+                <form onSubmit={saveBusinessSettings} className="space-y-4">
+                  <section className="rounded-xl border border-[#C8E6D8] bg-white p-5 shadow-sm">
+                    <h3 className="mb-4 text-sm font-bold text-[#0F6E56]">
+                      {no.admin.businessSettings}
+                    </h3>
+                    <div className="space-y-3">
+                      <div>
+                        <label className="text-xs font-bold text-[#7A9A8E]">Bedriftsnavn</label>
+                        <input
+                          required
+                          value={businessForm.name}
+                          onChange={(e) =>
+                            setBusinessForm((f) => ({ ...f, name: e.target.value }))
+                          }
+                          className={inputClass}
+                        />
+                      </div>
+                      <div>
+                        <label className="text-xs font-bold text-[#7A9A8E]">Adresse</label>
+                        <input
+                          value={businessForm.address}
+                          onChange={(e) =>
+                            setBusinessForm((f) => ({ ...f, address: e.target.value }))
+                          }
+                          className={inputClass}
+                        />
+                      </div>
+                      <div>
+                        <label className="text-xs font-bold text-[#7A9A8E]">By</label>
+                        <input
+                          value={businessForm.city}
+                          onChange={(e) =>
+                            setBusinessForm((f) => ({ ...f, city: e.target.value }))
+                          }
+                          className={inputClass}
+                        />
+                      </div>
+                      <div>
+                        <label className="text-xs font-bold text-[#7A9A8E]">Telefon</label>
+                        <input
+                          type="tel"
+                          value={businessForm.phone}
+                          onChange={(e) =>
+                            setBusinessForm((f) => ({ ...f, phone: e.target.value }))
+                          }
+                          className={inputClass}
+                        />
+                      </div>
+                      <div>
+                        <label className="text-xs font-bold text-[#7A9A8E]">E-post</label>
+                        <input
+                          type="email"
+                          value={businessForm.email}
+                          onChange={(e) =>
+                            setBusinessForm((f) => ({ ...f, email: e.target.value }))
+                          }
+                          className={inputClass}
+                        />
+                      </div>
+                      <div>
+                        <label className="text-xs font-bold text-[#7A9A8E]">Beskrivelse</label>
+                        <textarea
+                          value={businessForm.description}
+                          onChange={(e) =>
+                            setBusinessForm((f) => ({ ...f, description: e.target.value }))
+                          }
+                          rows={3}
+                          className={inputClass}
+                        />
+                      </div>
+                      <div>
+                        <label className="text-xs font-bold text-[#7A9A8E]">Logo URL</label>
+                        <input
+                          type="url"
+                          value={businessForm.logo_url}
+                          onChange={(e) =>
+                            setBusinessForm((f) => ({ ...f, logo_url: e.target.value }))
+                          }
+                          placeholder="https://..."
+                          className={inputClass}
+                        />
+                      </div>
+                    </div>
+                  </section>
+                  <div className="flex items-center gap-4">
+                    <button
+                      type="submit"
+                      disabled={businessSaving}
+                      className="btn-primary rounded-xl px-6 py-3 text-sm font-bold text-white disabled:opacity-60"
                     >
-                      {CANCELLATION_HOUR_OPTIONS.map((opt) => (
-                        <option key={opt.value} value={opt.value}>
-                          {opt.label}
-                        </option>
-                      ))}
-                    </select>
+                      {businessSaving ? no.common.loading : no.admin.save}
+                    </button>
+                    {businessSaved && (
+                      <span className="text-sm font-semibold text-[#0F6E56]">Lagret!</span>
+                    )}
                   </div>
-                )}
+                </form>
+              )}
 
-                {cancellationAllowed && (
-                  <label className="mt-4 flex items-center justify-between gap-4 py-2">
-                    <span className="text-sm font-semibold">Krev begrunnelse</span>
+              {settingsTab === "apningstider" && (
+                <form onSubmit={saveSalonHours} className="space-y-4">
+                  <section className="rounded-xl border border-[#C8E6D8] bg-white p-5 shadow-sm">
+                    <h3 className="mb-1 text-sm font-bold text-[#0F6E56]">
+                      {no.admin.openingHours}
+                    </h3>
+                    <p className="mb-4 text-xs text-[#7A9A8E]">
+                      Salongens åpningstider (gjelder hele bedriften, ikke per ansatt)
+                    </p>
+                    <div className="space-y-3">
+                      {WEEKDAY_LABELS.map(({ day_of_week, label }) => {
+                        const row =
+                          salonHoursForm.find((r) => r.day_of_week === day_of_week) ??
+                          defaultWeekSchedule().find((r) => r.day_of_week === day_of_week)!;
+
+                        return (
+                          <div
+                            key={day_of_week}
+                            className={`rounded-lg border px-3 py-3 ${
+                              row.is_active
+                                ? "border-[#C8E6D8] bg-[#f0faf6]/40"
+                                : "border-[#C8E6D8]/60 bg-white"
+                            }`}
+                          >
+                            <div className="flex items-center justify-between gap-3">
+                              <span className="text-sm font-semibold text-[#1a3d30]">{label}</span>
+                              <label className="flex cursor-pointer items-center gap-2">
+                                <span className="text-[10px] font-bold text-[#7A9A8E]">
+                                  {row.is_active ? "Åpen" : "Stengt"}
+                                </span>
+                                <input
+                                  type="checkbox"
+                                  checked={row.is_active}
+                                  onChange={(e) =>
+                                    updateSalonHoursDay(day_of_week, {
+                                      is_active: e.target.checked,
+                                    })
+                                  }
+                                  className="accent-[#0F6E56]"
+                                />
+                              </label>
+                            </div>
+                            {row.is_active && (
+                              <div className="mt-2 grid grid-cols-2 gap-2">
+                                <div>
+                                  <label className="text-[10px] font-bold text-[#7A9A8E]">Fra</label>
+                                  <input
+                                    type="time"
+                                    value={row.start_time.slice(0, 5)}
+                                    onChange={(e) =>
+                                      updateSalonHoursDay(day_of_week, {
+                                        start_time: e.target.value,
+                                      })
+                                    }
+                                    className={inputClass}
+                                  />
+                                </div>
+                                <div>
+                                  <label className="text-[10px] font-bold text-[#7A9A8E]">Til</label>
+                                  <input
+                                    type="time"
+                                    value={row.end_time.slice(0, 5)}
+                                    onChange={(e) =>
+                                      updateSalonHoursDay(day_of_week, { end_time: e.target.value })
+                                    }
+                                    className={inputClass}
+                                  />
+                                </div>
+                              </div>
+                            )}
+                          </div>
+                        );
+                      })}
+                    </div>
+                  </section>
+                  <div className="flex items-center gap-4">
+                    <button
+                      type="submit"
+                      disabled={salonHoursSaving}
+                      className="btn-primary rounded-xl px-6 py-3 text-sm font-bold text-white disabled:opacity-60"
+                    >
+                      {salonHoursSaving ? no.common.loading : no.admin.save}
+                    </button>
+                    {salonHoursSaved && (
+                      <span className="text-sm font-semibold text-[#0F6E56]">Lagret!</span>
+                    )}
+                  </div>
+                </form>
+              )}
+
+              {settingsTab === "avbestilling" && (
+                <div className="space-y-4">
+                  <section className="rounded-xl border border-[#C8E6D8] bg-white p-5 shadow-sm">
+                    <h3 className="mb-4 text-sm font-bold text-[#0F6E56]">Avbestillingsregler</h3>
+
+                    <label className="flex items-center justify-between gap-4 py-2">
+                      <span className="text-sm font-semibold">Tillat avbestilling</span>
+                      <button
+                        type="button"
+                        role="switch"
+                        aria-checked={cancellationAllowed}
+                        onClick={() => setCancellationAllowed((v) => !v)}
+                        className={`relative h-7 w-12 shrink-0 rounded-full transition-colors ${
+                          cancellationAllowed ? "bg-[#0F6E56]" : "bg-[#C8E6D8]"
+                        }`}
+                      >
+                        <span
+                          className={`absolute top-0.5 left-0.5 h-6 w-6 rounded-full bg-white shadow transition-transform ${
+                            cancellationAllowed ? "translate-x-5" : "translate-x-0"
+                          }`}
+                        />
+                      </button>
+                    </label>
+
+                    {cancellationAllowed && (
+                      <div className="mt-3">
+                        <label className="text-xs font-bold text-[#7A9A8E]">
+                          Frist for avbestilling
+                        </label>
+                        <select
+                          value={cancellationHours}
+                          onChange={(e) => setCancellationHours(Number(e.target.value))}
+                          className={inputClass}
+                        >
+                          {CANCELLATION_HOUR_OPTIONS.map((opt) => (
+                            <option key={opt.value} value={opt.value}>
+                              {opt.label}
+                            </option>
+                          ))}
+                        </select>
+                      </div>
+                    )}
+
+                    {cancellationAllowed && (
+                      <label className="mt-4 flex items-center justify-between gap-4 py-2">
+                        <span className="text-sm font-semibold">Krev begrunnelse</span>
+                        <button
+                          type="button"
+                          role="switch"
+                          aria-checked={cancellationReasonRequired}
+                          onClick={() => setCancellationReasonRequired((v) => !v)}
+                          className={`relative h-7 w-12 shrink-0 rounded-full transition-colors ${
+                            cancellationReasonRequired ? "bg-[#0F6E56]" : "bg-[#C8E6D8]"
+                          }`}
+                        >
+                          <span
+                            className={`absolute top-0.5 left-0.5 h-6 w-6 rounded-full bg-white shadow transition-transform ${
+                              cancellationReasonRequired ? "translate-x-5" : "translate-x-0"
+                            }`}
+                          />
+                        </button>
+                      </label>
+                    )}
+
+                    <label className="mt-4 flex items-center justify-between gap-4 border-t border-[#C8E6D8] pt-4">
+                      <span className="text-sm font-semibold">
+                        Behold betaling ved sen avbestilling
+                      </span>
+                      <button
+                        type="button"
+                        role="switch"
+                        aria-checked={cancellationFeeEnabled}
+                        onClick={() => setCancellationFeeEnabled((v) => !v)}
+                        className={`relative h-7 w-12 shrink-0 rounded-full transition-colors ${
+                          cancellationFeeEnabled ? "bg-[#0F6E56]" : "bg-[#C8E6D8]"
+                        }`}
+                      >
+                        <span
+                          className={`absolute top-0.5 left-0.5 h-6 w-6 rounded-full bg-white shadow transition-transform ${
+                            cancellationFeeEnabled ? "translate-x-5" : "translate-x-0"
+                          }`}
+                        />
+                      </button>
+                    </label>
+
+                    {cancellationFeeEnabled && (
+                      <div className="mt-3 space-y-4">
+                        <div>
+                          <label className="text-xs font-bold text-[#7A9A8E]">
+                            Frist for full refusjon
+                          </label>
+                          <select
+                            value={cancellationRefundHours}
+                            onChange={(e) => setCancellationRefundHours(Number(e.target.value))}
+                            className={inputClass}
+                          >
+                            {CANCELLATION_HOUR_OPTIONS.map((opt) => (
+                              <option key={opt.value} value={opt.value}>
+                                {opt.label}
+                              </option>
+                            ))}
+                          </select>
+                        </div>
+
+                        <div>
+                          <label className="text-xs font-bold text-[#7A9A8E]">
+                            Gebyr ved sen avbestilling
+                          </label>
+                          <div className="mt-2 space-y-2">
+                            {CANCELLATION_FEE_OPTIONS.map((opt) => (
+                              <label
+                                key={opt.value}
+                                className="flex cursor-pointer items-center gap-3 rounded-lg border border-[#C8E6D8] px-4 py-3 text-sm"
+                              >
+                                <input
+                                  type="radio"
+                                  name="cancellation_fee_type"
+                                  value={opt.value}
+                                  checked={cancellationFeeType === opt.value}
+                                  onChange={() => setCancellationFeeType(opt.value)}
+                                  className="accent-[#0F6E56]"
+                                />
+                                <span className="font-semibold">{opt.label}</span>
+                              </label>
+                            ))}
+                          </div>
+
+                          {cancellationFeeType === "fixed" && (
+                            <div className="mt-3">
+                              <label className="text-xs font-bold text-[#7A9A8E]">Beløp (NOK)</label>
+                              <input
+                                type="number"
+                                min={0}
+                                value={cancellationFeeAmount}
+                                onChange={(e) => setCancellationFeeAmount(e.target.value)}
+                                placeholder="0"
+                                className={inputClass}
+                              />
+                            </div>
+                          )}
+                        </div>
+                      </div>
+                    )}
+                  </section>
+                  <div className="flex items-center gap-4">
                     <button
                       type="button"
-                      role="switch"
-                      aria-checked={cancellationReasonRequired}
-                      onClick={() => setCancellationReasonRequired((v) => !v)}
-                      className={`relative h-7 w-12 shrink-0 rounded-full transition-colors ${
-                        cancellationReasonRequired ? "bg-[#0F6E56]" : "bg-[#C8E6D8]"
-                      }`}
+                      onClick={saveCancellationSettings}
+                      disabled={settingsSaving}
+                      className="btn-primary rounded-xl px-6 py-3 text-sm font-bold text-white disabled:opacity-60"
                     >
-                      <span
-                        className={`absolute top-0.5 left-0.5 h-6 w-6 rounded-full bg-white shadow transition-transform ${
-                          cancellationReasonRequired ? "translate-x-5" : "translate-x-0"
-                        }`}
-                      />
+                      {settingsSaving ? no.common.loading : no.admin.save}
                     </button>
-                  </label>
-                )}
+                    {settingsSaved && (
+                      <span className="text-sm font-semibold text-[#0F6E56]">Lagret!</span>
+                    )}
+                  </div>
+                </div>
+              )}
 
-                <label className="mt-4 flex items-center justify-between gap-4 border-t border-[#C8E6D8] pt-4">
-                  <span className="text-sm font-semibold">Behold betaling ved sen avbestilling</span>
-                  <button
-                    type="button"
-                    role="switch"
-                    aria-checked={cancellationFeeEnabled}
-                    onClick={() => setCancellationFeeEnabled((v) => !v)}
-                    className={`relative h-7 w-12 shrink-0 rounded-full transition-colors ${
-                      cancellationFeeEnabled ? "bg-[#0F6E56]" : "bg-[#C8E6D8]"
-                    }`}
-                  >
-                    <span
-                      className={`absolute top-0.5 left-0.5 h-6 w-6 rounded-full bg-white shadow transition-transform ${
-                        cancellationFeeEnabled ? "translate-x-5" : "translate-x-0"
-                      }`}
-                    />
-                  </button>
-                </label>
+              {settingsTab === "varsler" && (
+                <section className="rounded-xl border border-[#C8E6D8] bg-white p-5 shadow-sm">
+                  <h3 className="mb-4 text-sm font-bold text-[#0F6E56]">{no.admin.notifications}</h3>
+                  {["SMS ved ny booking", "Push-varsler", "E-post kvittering"].map((n) => (
+                    <label key={n} className="mb-2 flex items-center gap-3 text-sm">
+                      <input type="checkbox" defaultChecked className="accent-[#0F6E56]" />
+                      {n}
+                    </label>
+                  ))}
+                </section>
+              )}
 
-                {cancellationFeeEnabled && (
-                  <div className="mt-3 space-y-4">
-                    <div>
-                      <label className="text-xs font-bold text-[#7A9A8E]">Frist for full refusjon</label>
-                      <select
-                        value={cancellationRefundHours}
-                        onChange={(e) => setCancellationRefundHours(Number(e.target.value))}
-                        className={inputClass}
-                      >
-                        {CANCELLATION_HOUR_OPTIONS.map((opt) => (
-                          <option key={opt.value} value={opt.value}>
-                            {opt.label}
-                          </option>
-                        ))}
-                      </select>
-                    </div>
-
-                    <div>
-                      <label className="text-xs font-bold text-[#7A9A8E]">Gebyr ved sen avbestilling</label>
-                      <div className="mt-2 space-y-2">
-                        {CANCELLATION_FEE_OPTIONS.map((opt) => (
-                          <label
-                            key={opt.value}
-                            className="flex cursor-pointer items-center gap-3 rounded-lg border border-[#C8E6D8] px-4 py-3 text-sm"
-                          >
-                            <input
-                              type="radio"
-                              name="cancellation_fee_type"
-                              value={opt.value}
-                              checked={cancellationFeeType === opt.value}
-                              onChange={() => setCancellationFeeType(opt.value)}
-                              className="accent-[#0F6E56]"
-                            />
-                            <span className="font-semibold">{opt.label}</span>
-                          </label>
-                        ))}
-                      </div>
-
-                      {cancellationFeeType === "fixed" && (
-                        <div className="mt-3">
-                          <label className="text-xs font-bold text-[#7A9A8E]">Beløp (NOK)</label>
-                          <input
-                            type="number"
-                            min={0}
-                            value={cancellationFeeAmount}
-                            onChange={(e) => setCancellationFeeAmount(e.target.value)}
-                            placeholder="0"
-                            className={inputClass}
-                          />
-                        </div>
+              {settingsTab === "abonnement" && (
+                <div className="space-y-4">
+                  <section className="rounded-xl border border-[#C8E6D8] bg-white p-5 shadow-sm">
+                    <h3 className="mb-4 text-sm font-bold text-[#0F6E56]">Abonnement</h3>
+                    <div className="mb-4 rounded-lg border border-[#C8E6D8] bg-[#f0faf6]/60 px-4 py-3">
+                      <p className="text-xs font-bold text-[#7A9A8E]">Gjeldende plan</p>
+                      <p className="mt-1 text-lg font-bold text-[#0F6E56]">
+                        {PLAN_LABELS[salon.plan]}
+                      </p>
+                      {salon.plan === "trial" && (
+                        <p className="mt-2 text-sm text-[#4A6B5E]">
+                          <span className="font-bold text-[#0F6E56]">
+                            {getTrialDaysLeft(salon.trial_ends_at)}
+                          </span>{" "}
+                          {getTrialDaysLeft(salon.trial_ends_at) === 1 ? "dag" : "dager"} igjen av
+                          prøveperioden
+                        </p>
+                      )}
+                      {salon.plan === "pro" && (
+                        <p className="mt-2 text-sm text-[#4A6B5E]">
+                          Du har aktivt Pro-abonnement til 299 kr/mnd
+                        </p>
                       )}
                     </div>
-                  </div>
-                )}
-              </section>
+                    {salon.plan !== "pro" && (
+                      <>
+                        <button
+                          type="button"
+                          onClick={handleUpgrade}
+                          disabled={upgrading}
+                          className="btn-primary w-full rounded-xl px-6 py-3 text-sm font-bold text-white disabled:opacity-60 sm:w-auto"
+                        >
+                          {upgrading ? no.common.loading : "Oppgrader til Pro 299 kr/mnd"}
+                        </button>
+                        {upgradeError && (
+                          <p className="mt-2 text-sm text-red-600">
+                            Kunne ikke starte oppgradering. Prøv igjen.
+                          </p>
+                        )}
+                      </>
+                    )}
+                  </section>
 
-              <section className="rounded-xl border border-[#C8E6D8] bg-white p-5 shadow-sm">
-                <h3 className="mb-4 text-sm font-bold text-[#0F6E56]">{no.admin.notifications}</h3>
-                {["SMS ved ny booking", "Push-varsler", "E-post kvittering"].map((n) => (
-                  <label key={n} className="mb-2 flex items-center gap-3 text-sm">
-                    <input type="checkbox" defaultChecked className="accent-[#0F6E56]" />
-                    {n}
-                  </label>
-                ))}
-              </section>
-
-              <div className="flex items-center gap-4">
-                <button
-                  type="button"
-                  onClick={saveCancellationSettings}
-                  disabled={settingsSaving}
-                  className="btn-primary rounded-xl px-6 py-3 text-sm font-bold text-white disabled:opacity-60"
-                >
-                  {settingsSaving ? no.common.loading : no.admin.save}
-                </button>
-                {settingsSaved && (
-                  <span className="text-sm font-semibold text-[#0F6E56]">Lagret!</span>
-                )}
-              </div>
+                  <section className="rounded-xl border border-[#C8E6D8] bg-white p-5 shadow-sm">
+                    <h3 className="mb-4 text-sm font-bold text-[#0F6E56]">Betalingsmetoder</h3>
+                    <div className="space-y-2">
+                      {PAYMENT_OPTIONS.map((opt) => (
+                        <label
+                          key={opt.id}
+                          className="flex items-center gap-3 rounded-lg border border-[#C8E6D8] px-4 py-3 text-sm"
+                        >
+                          <input type="checkbox" defaultChecked className="accent-[#0F6E56]" />
+                          <span className="font-semibold">{opt.label}</span>
+                          <span className="text-xs text-[#7A9A8E]">{opt.description}</span>
+                        </label>
+                      ))}
+                    </div>
+                    {salon.stripe_customer_id && (
+                      <p className="mt-3 text-xs text-[#7A9A8E]">
+                        Stripe: {salon.stripe_customer_id}
+                      </p>
+                    )}
+                  </section>
+                </div>
+              )}
             </div>
           )}
         </div>
