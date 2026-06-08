@@ -185,28 +185,50 @@ export default function SalonPage() {
     const startsAt = buildDateTime(selectedDateKey, selectedTime);
     const endsAt = new Date(startsAt.getTime() + selectedService.duration_min * 60_000);
 
-    const { error } = await supabase.from("bookings").insert({
-      salon_id: salon.id,
-      staff_id: selectedStaffId,
-      service_id: selectedService.id,
-      client_name: clientName.trim(),
-      client_phone: `+47${clientPhone.replace(/\D/g, "")}`,
-      client_email: clientEmail.trim() || null,
-      client_notes: clientNotes.trim() || null,
-      starts_at: startsAt.toISOString(),
-      ends_at: endsAt.toISOString(),
-      price_nok: selectedService.price_nok,
-      status: "confirmed",
-      sms_confirmation_sent: false,
-      sms_reminder_sent: false,
-    });
+    const { data: booking, error } = await supabase
+      .from("bookings")
+      .insert({
+        salon_id: salon.id,
+        staff_id: selectedStaffId,
+        service_id: selectedService.id,
+        client_name: clientName.trim(),
+        client_phone: `+47${clientPhone.replace(/\D/g, "")}`,
+        client_email: clientEmail.trim() || null,
+        client_notes: clientNotes.trim() || null,
+        starts_at: startsAt.toISOString(),
+        ends_at: endsAt.toISOString(),
+        price_nok: selectedService.price_nok,
+        status: "confirmed",
+        sms_confirmation_sent: false,
+        sms_reminder_sent: false,
+      })
+      .select("id")
+      .single();
 
     setSubmitting(false);
 
-    if (error) {
+    if (error || !booking) {
       setSubmitError(true);
       return;
     }
+
+    const dateStr = formatDateLong(startsAt);
+    const timeStr = new Intl.DateTimeFormat("nb-NO", {
+      hour: "2-digit",
+      minute: "2-digit",
+    }).format(startsAt);
+    const smsMessage = `Hei ${clientName.trim()}! Din time hos ${salon.name} er bekreftet: ${dateStr} kl. ${timeStr}. Vi gleder oss til å se deg! - Bookti`;
+
+    void fetch("/api/sms/send", {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({
+        to: `+47${clientPhone.replace(/\D/g, "")}`,
+        message: smsMessage,
+        booking_id: booking.id,
+        salon_id: salon.id,
+      }),
+    });
 
     setConfirmed({
       serviceName: selectedService.name,
