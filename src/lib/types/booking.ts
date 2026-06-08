@@ -5,7 +5,12 @@ export type BookingStatus =
   | "completed"
   | "no_show";
 
-export type PaymentMethod = "vipps" | "invoice" | "none";
+export type PaymentMethod =
+  | "vipps"
+  | "apple_pay"
+  | "google_pay"
+  | "stripe"
+  | "cash";
 
 export type Booking = {
   id: string;
@@ -19,6 +24,7 @@ export type Booking = {
   status: BookingStatus;
   paymentMethod: PaymentMethod;
   vippsOrderId?: string;
+  stripeSessionId?: string;
   reminderSentAt?: string;
   notes?: string;
   createdAt: string;
