@@ -93,6 +93,10 @@ async function createSalon(
     cancellation_allowed: false,
     cancellation_hours: 24,
     cancellation_reason_required: false,
+    cancellation_fee_enabled: false,
+    cancellation_refund_hours: 24,
+    cancellation_fee_type: null,
+    cancellation_fee_amount: null,
     is_active: true,
   };
 
