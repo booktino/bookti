@@ -1,103 +1,41 @@
 import { NextResponse } from "next/server";
-import { createBooking } from "@/lib/booking/create";
-import {
-  addBooking,
-  getBookings,
-  getBusinessBySlug,
-  getService,
-} from "@/lib/data/demo";
-import { buildReminderJobs, sendPush, sendSms } from "@/lib/notifications/reminders";
-import { initiateStripePayment } from "@/lib/stripe/client";
-import { vipps } from "@/lib/vipps/client";
-import type { CreateBookingInput, PaymentMethod } from "@/lib/types/booking";
-
-const STRIPE_PAYMENT: PaymentMethod[] = ["apple_pay", "google_pay", "stripe"];
+import { createClient } from "@/lib/supabase-server";
 
 export async function POST(request: Request) {
-  const body = (await request.json()) as CreateBookingInput & { slug?: string };
+  try {
+    const { booking_id } = await request.json();
+    
+    if (!booking_id) {
+      return NextResponse.json({ error: "Mangler booking_id" }, { status: 400 });
+    }
 
-  const business = body.slug
-    ? getBusinessBySlug(body.slug)
-    : getBusinessBySlug("din-bedrift");
+    const supabase = await createClient();
 
-  if (!business) {
-    return NextResponse.json({ error: "Bedrift ikke funnet" }, { status: 404 });
+    const { data: booking, error: fetchError } = await supabase
+      .from("bookings")
+      .select("*, salons(name, cancellation_hours, cancellation_allowed)")
+      .eq("id", booking_id)
+      .single();
+
+    if (fetchError || !booking) {
+      return NextResponse.json({ error: "Time ikke funnet" }, { status: 404 });
+    }
+
+    if (booking.status === "cancelled") {
+      return NextResponse.json({ error: "Allerede avbestilt" }, { status: 400 });
+    }
+
+    const { error: updateError } = await supabase
+      .from("bookings")
+      .update({ status: "cancelled", refund_status: "full" })
+      .eq("id", booking_id);
+
+    if (updateError) {
+      return NextResponse.json({ error: updateError.message }, { status: 500 });
+    }
+
+    return NextResponse.json({ success: true });
+  } catch (err) {
+    return NextResponse.json({ error: "Serverfeil" }, { status: 500 });
   }
-
-  const service = getService(body.serviceId);
-  if (!service || service.businessId !== business.id) {
-    return NextResponse.json({ error: "Tjeneste ikke funnet" }, { status: 404 });
-  }
-
-  const existing = getBookings(business.id);
-  const result = createBooking(
-    { ...body, businessId: business.id },
-    service,
-    existing,
-  );
-
-  if ("error" in result) {
-    return NextResponse.json({ error: result.error }, { status: 409 });
-  }
-
-  addBooking(result);
-
-  const reminders = buildReminderJobs(
-    result.id,
-    result.customerName,
-    result.customerPhone,
-    business.name,
-    result.startsAt,
-    "owner-demo-token",
-  );
-
-  for (const job of reminders) {
-    if (job.channel === "sms") await sendSms(job.recipient, job.message);
-    if (job.channel === "push") await sendPush(job.recipient, job.message);
-  }
-
-  const baseUrl = process.env.NEXT_PUBLIC_APP_URL ?? "";
-  let paymentUrl: string | undefined;
-
-  if (result.paymentMethod === "vipps") {
-    const payment = await vipps.initiatePayment({
-      amountOre: service.priceOre,
-      orderId: result.id,
-      description: `${service.name} — ${business.name}`,
-      customerPhone: result.customerPhone,
-      callbackUrl: `${baseUrl}/api/vipps/callback`,
-      fallbackUrl: `${baseUrl}/${business.slug}`,
-    });
-    paymentUrl = payment.url;
-  } else if (STRIPE_PAYMENT.includes(result.paymentMethod)) {
-    const stripePayment = await initiateStripePayment(result.paymentMethod, {
-      amountOre: service.priceOre,
-      orderId: result.id,
-      description: `${service.name} — ${business.name}`,
-      customerEmail: result.customerEmail,
-      successUrl: `${baseUrl}/${business.slug}?success=1`,
-      cancelUrl: `${baseUrl}/${business.slug}`,
-      wallet:
-        result.paymentMethod === "apple_pay"
-          ? "apple_pay"
-          : result.paymentMethod === "google_pay"
-            ? "google_pay"
-            : undefined,
-    });
-    paymentUrl = stripePayment?.url;
-  }
-
-  return NextResponse.json({ booking: result, paymentUrl }, { status: 201 });
-}
-
-export async function GET(request: Request) {
-  const { searchParams } = new URL(request.url);
-  const slug = searchParams.get("slug") ?? "din-bedrift";
-  const business = getBusinessBySlug(slug);
-
-  if (!business) {
-    return NextResponse.json({ error: "Bedrift ikke funnet" }, { status: 404 });
-  }
-
-  return NextResponse.json({ bookings: getBookings(business.id) });
 }
