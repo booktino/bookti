@@ -25,9 +25,13 @@ export async function POST(request: Request) {
     return NextResponse.json({ error: "Database ikke konfigurert" }, { status: 500 });
   }
 
+  const baseUrl = process.env.NEXT_PUBLIC_APP_URL || "http://localhost:3000";
+  const cancelUrl = `${baseUrl}/cancel/${booking_id}`;
+  const smsMessage = message.replace(`bookti.no/cancel/${booking_id}`, cancelUrl);
+
   const result = await sendTwilioSms({
     to,
-    message,
+    message: smsMessage,
     bookingId: booking_id,
     salonId: salon_id,
     type: "confirmation",
