@@ -1,7 +1,7 @@
 "use client";
 
 import { useParams } from "next/navigation";
-import { useEffect, useMemo, useState } from "react";
+import { useEffect, useState } from "react";
 import { Logo } from "@/components/Logo";
 import {
   canCancelOnline,
@@ -49,7 +49,6 @@ const inputClass =
 
 export default function CancelBookingPage() {
   const { booking_id: bookingId } = useParams<{ booking_id: string }>();
-  const supabase = useMemo(() => createClient(), []);
 
   const [pageState, setPageState] = useState<PageState>("loading");
   const [booking, setBooking] = useState<BookingWithRelations | null>(null);
@@ -64,20 +63,60 @@ export default function CancelBookingPage() {
     if (!bookingId) return;
 
     async function loadBooking() {
-      const { data, error: fetchError } = await supabase
-        .from("bookings")
-        .select(
-          "*, salons(name, cancellation_allowed, cancellation_hours, cancellation_reason_required, cancellation_fee_enabled, cancellation_refund_hours, cancellation_fee_type, cancellation_fee_amount), services(name)",
-        )
-        .eq("id", bookingId)
-        .maybeSingle();
+      const supabase = createClient();
 
-      if (fetchError || !data) {
+      const { data: bookingRow, error: bookingError } = await supabase
+        .from("bookings")
+        .select("*")
+        .eq("id", bookingId)
+        .single();
+
+      console.log("booking:", bookingRow, "error:", bookingError);
+
+      if (bookingError || !bookingRow) {
         setPageState("not_found");
         return;
       }
 
-      const row = data as BookingWithRelations;
+      const { data: salonData, error: salonError } = await supabase
+        .from("salons")
+        .select("*")
+        .eq("id", bookingRow.salon_id)
+        .single();
+
+      console.log("salon:", salonData, "error:", salonError);
+
+      if (salonError || !salonData) {
+        setPageState("not_found");
+        return;
+      }
+
+      const salonRow: Salon = {
+        name: salonData.name,
+        cancellation_allowed: salonData.cancellation_allowed ?? false,
+        cancellation_hours: salonData.cancellation_hours ?? 24,
+        cancellation_reason_required: salonData.cancellation_reason_required ?? false,
+        cancellation_fee_enabled: salonData.cancellation_fee_enabled ?? false,
+        cancellation_refund_hours: salonData.cancellation_refund_hours ?? 24,
+        cancellation_fee_type: salonData.cancellation_fee_type ?? null,
+        cancellation_fee_amount: salonData.cancellation_fee_amount ?? null,
+      };
+
+      let serviceRow: Service | null = null;
+      if (bookingRow.service_id) {
+        const { data: serviceData } = await supabase
+          .from("services")
+          .select("name")
+          .eq("id", bookingRow.service_id)
+          .maybeSingle();
+        serviceRow = serviceData;
+      }
+
+      const row: BookingWithRelations = {
+        ...bookingRow,
+        salons: salonRow,
+        services: serviceRow,
+      };
       setBooking(row);
 
       if (row.status === "cancelled") {
@@ -119,7 +158,7 @@ export default function CancelBookingPage() {
     }
 
     void loadBooking();
-  }, [bookingId, supabase]);
+  }, [bookingId]);
 
   async function handleCancel() {
     if (!booking || !bookingId) return;
@@ -201,6 +240,7 @@ export default function CancelBookingPage() {
               <p className="mt-2 text-sm text-[#4A6B5E]">
                 Vi fant ingen time med denne lenken. Kontakt salongen direkte.
               </p>
+              <p className="mt-1 text-xs text-[#7A9A8E]">ID: {bookingId}</p>
             </>
           )}
 
