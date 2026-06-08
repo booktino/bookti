@@ -1,19 +1,22 @@
 "use client";
 
 import { useEffect, useMemo, useState } from "react";
+import { useRouter } from "next/navigation";
 import { Logo } from "@/components/Logo";
 import { no } from "@/i18n/no";
-import {
-  demoBusiness,
-  demoClients,
-  demoInvoices,
-  demoServices,
-} from "@/lib/data/demo";
-import { formatNok } from "@/lib/norway/mva";
+import type { Database } from "@/lib/database.types";
+import { createClient } from "@/lib/supabase";
 import { PAYMENT_OPTIONS } from "@/lib/payments/methods";
 import { FREE_TRIAL_MONTHS } from "@/lib/pricing/plans";
 
 type AdminTab = "calendar" | "clients" | "invoices" | "settings";
+
+type Salon = Database["public"]["Tables"]["salons"]["Row"];
+
+type BookingRow = Database["public"]["Tables"]["bookings"]["Row"] & {
+  staff: { name: string } | null;
+  services: { name: string } | null;
+};
 
 type CalendarBookingStatus = "kommende" | "ferdig" | "kansellert";
 
@@ -22,9 +25,17 @@ type CalendarBooking = {
   date: string;
   time: string;
   customerName: string;
-  serviceId: string;
+  serviceName: string;
   staffName: string;
   status: CalendarBookingStatus;
+};
+
+type ClientRow = {
+  id: string;
+  name: string;
+  phone: string;
+  visits: number;
+  lastVisit: string;
 };
 
 const NORWEGIAN_MONTHS = [
@@ -44,35 +55,73 @@ const NORWEGIAN_MONTHS = [
 
 const WEEKDAYS = ["Man", "Tir", "Ons", "Tor", "Fre", "Lør", "Søn"] as const;
 
-const MOCK_BOOKINGS: CalendarBooking[] = [
-  { id: "mb-01", date: "2026-06-02", time: "09:00", customerName: "Anna Kowalczyk", serviceId: "svc-001", staffName: "Lise", status: "ferdig" },
-  { id: "mb-02", date: "2026-06-02", time: "11:30", customerName: "Kari Olsen", serviceId: "svc-003", staffName: "Nora", status: "ferdig" },
-  { id: "mb-03", date: "2026-06-05", time: "10:00", customerName: "Sara Andersen", serviceId: "svc-002", staffName: "Erik", status: "ferdig" },
-  { id: "mb-04", date: "2026-06-05", time: "14:00", customerName: "Maria Lindstad", serviceId: "svc-004", staffName: "Lise", status: "kansellert" },
-  { id: "mb-05", date: "2026-06-08", time: "09:00", customerName: "Anna Kowalczyk", serviceId: "svc-001", staffName: "Lise", status: "ferdig" },
-  { id: "mb-06", date: "2026-06-08", time: "10:30", customerName: "Maria Lindstad", serviceId: "svc-002", staffName: "Erik", status: "ferdig" },
-  { id: "mb-07", date: "2026-06-08", time: "13:00", customerName: "Ingrid Haugen", serviceId: "svc-003", staffName: "Nora", status: "kommende" },
-  { id: "mb-08", date: "2026-06-08", time: "15:30", customerName: "Sara Andersen", serviceId: "svc-001", staffName: "Lise", status: "kommende" },
-  { id: "mb-09", date: "2026-06-10", time: "08:30", customerName: "Kari Olsen", serviceId: "svc-004", staffName: "Erik", status: "kommende" },
-  { id: "mb-10", date: "2026-06-10", time: "12:00", customerName: "Ingrid Haugen", serviceId: "svc-002", staffName: "Nora", status: "kommende" },
-  { id: "mb-11", date: "2026-06-12", time: "09:30", customerName: "Anna Kowalczyk", serviceId: "svc-003", staffName: "Lise", status: "kommende" },
-  { id: "mb-12", date: "2026-06-15", time: "11:00", customerName: "Maria Lindstad", serviceId: "svc-001", staffName: "Erik", status: "kommende" },
-  { id: "mb-13", date: "2026-06-15", time: "14:30", customerName: "Sara Andersen", serviceId: "svc-004", staffName: "Nora", status: "kommende" },
-  { id: "mb-14", date: "2026-06-15", time: "16:00", customerName: "Kari Olsen", serviceId: "svc-002", staffName: "Lise", status: "kommende" },
-  { id: "mb-15", date: "2026-06-18", time: "10:00", customerName: "Ingrid Haugen", serviceId: "svc-001", staffName: "Nora", status: "kommende" },
-  { id: "mb-16", date: "2026-06-20", time: "09:00", customerName: "Anna Kowalczyk", serviceId: "svc-002", staffName: "Erik", status: "kommende" },
-  { id: "mb-17", date: "2026-06-20", time: "13:30", customerName: "Maria Lindstad", serviceId: "svc-003", staffName: "Lise", status: "kommende" },
-  { id: "mb-18", date: "2026-06-22", time: "11:30", customerName: "Sara Andersen", serviceId: "svc-004", staffName: "Nora", status: "kommende" },
-  { id: "mb-19", date: "2026-06-25", time: "08:00", customerName: "Kari Olsen", serviceId: "svc-001", staffName: "Lise", status: "kommende" },
-  { id: "mb-20", date: "2026-06-25", time: "10:00", customerName: "Ingrid Haugen", serviceId: "svc-002", staffName: "Erik", status: "kommende" },
-  { id: "mb-21", date: "2026-06-25", time: "15:00", customerName: "Anna Kowalczyk", serviceId: "svc-003", staffName: "Nora", status: "kommende" },
-  { id: "mb-22", date: "2026-06-28", time: "12:30", customerName: "Maria Lindstad", serviceId: "svc-004", staffName: "Erik", status: "kommende" },
-  { id: "mb-23", date: "2026-07-03", time: "10:30", customerName: "Sara Andersen", serviceId: "svc-001", staffName: "Lise", status: "kommende" },
-  { id: "mb-24", date: "2026-05-28", time: "14:00", customerName: "Kari Olsen", serviceId: "svc-002", staffName: "Nora", status: "ferdig" },
-];
+const SLOTS_PER_WEEKDAY = 8;
 
 function dateKey(year: number, month: number, day: number) {
   return `${year}-${String(month + 1).padStart(2, "0")}-${String(day).padStart(2, "0")}`;
+}
+
+function getTodayKey() {
+  const now = new Date();
+  return dateKey(now.getFullYear(), now.getMonth(), now.getDate());
+}
+
+function getWeekBounds() {
+  const now = new Date();
+  const day = now.getDay();
+  const monday = new Date(now);
+  monday.setDate(now.getDate() - ((day + 6) % 7));
+  monday.setHours(0, 0, 0, 0);
+  const sunday = new Date(monday);
+  sunday.setDate(monday.getDate() + 6);
+  sunday.setHours(23, 59, 59, 999);
+  return { monday, sunday };
+}
+
+function countWeekdaySlots(staffCount: number) {
+  const { monday } = getWeekBounds();
+  let days = 0;
+  for (let i = 0; i < 7; i++) {
+    const d = new Date(monday);
+    d.setDate(monday.getDate() + i);
+    const dow = d.getDay();
+    if (dow >= 1 && dow <= 5) days++;
+  }
+  return days * SLOTS_PER_WEEKDAY * Math.max(staffCount, 1);
+}
+
+function formatPriceNok(kroner: number): string {
+  return new Intl.NumberFormat("nb-NO", {
+    style: "currency",
+    currency: "NOK",
+    minimumFractionDigits: 0,
+    maximumFractionDigits: 0,
+  }).format(kroner);
+}
+
+function mapBookingStatus(
+  status: Database["public"]["Tables"]["bookings"]["Row"]["status"],
+): CalendarBookingStatus {
+  if (status === "completed") return "ferdig";
+  if (status === "cancelled") return "kansellert";
+  return "kommende";
+}
+
+function bookingToCalendar(b: BookingRow): CalendarBooking {
+  const start = new Date(b.starts_at);
+  return {
+    id: b.id,
+    date: dateKey(start.getFullYear(), start.getMonth(), start.getDate()),
+    time: start.toLocaleTimeString("nb-NO", {
+      hour: "2-digit",
+      minute: "2-digit",
+      hour12: false,
+    }),
+    customerName: b.client_name,
+    serviceName: b.services?.name ?? "—",
+    staffName: b.staff?.name ?? "—",
+    status: mapBookingStatus(b.status),
+  };
 }
 
 function getCalendarCells(year: number, month: number) {
@@ -90,6 +139,11 @@ function getCalendarCells(year: number, month: number) {
 function formatSelectedDayLabel(dateStr: string) {
   const [y, m, d] = dateStr.split("-").map(Number);
   return `${d}. ${NORWEGIAN_MONTHS[m - 1]} ${y}`;
+}
+
+function formatDateShort(iso: string) {
+  const d = new Date(iso);
+  return `${d.getDate()}. ${NORWEGIAN_MONTHS[d.getMonth()].slice(0, 3)}`;
 }
 
 const STATUS_STYLES: Record<CalendarBookingStatus, string> = {
@@ -112,20 +166,159 @@ const TABS: { id: AdminTab; label: string; icon: string }[] = [
 ];
 
 export default function AdminPage() {
+  const router = useRouter();
   const [tab, setTab] = useState<AdminTab>("calendar");
   const [notifVisible, setNotifVisible] = useState(true);
-  const [viewDate, setViewDate] = useState(() => new Date(2026, 5, 1));
+  const [viewDate, setViewDate] = useState(() => new Date());
   const [selectedDay, setSelectedDay] = useState<string | null>(null);
+  const [loading, setLoading] = useState(true);
+  const [salon, setSalon] = useState<Salon | null>(null);
+  const [bookings, setBookings] = useState<BookingRow[]>([]);
+  const [staffCount, setStaffCount] = useState(0);
 
   useEffect(() => {
     const id = setInterval(() => setNotifVisible((v) => !v), 2800);
     return () => clearInterval(id);
   }, []);
 
-  const today = "2026-06-08";
-  const todayBookings = MOCK_BOOKINGS.filter(
-    (b) => b.date === today && b.status !== "kansellert",
+  useEffect(() => {
+    let cancelled = false;
+
+    async function loadAdminData() {
+      const supabase = createClient();
+      const {
+        data: { session },
+      } = await supabase.auth.getSession();
+
+      if (cancelled) return;
+
+      if (!session?.user) {
+        router.replace("/auth/login");
+        return;
+      }
+
+      const { data: salonData, error: salonError } = await supabase
+        .from("salons")
+        .select("*")
+        .eq("owner_id", session.user.id)
+        .single();
+
+      if (cancelled) return;
+
+      if (salonError || !salonData) {
+        console.error("[admin] salon fetch failed", salonError?.message);
+        setLoading(false);
+        return;
+      }
+
+      const [bookingsRes, staffRes] = await Promise.all([
+        supabase
+          .from("bookings")
+          .select("*, staff(name), services(name)")
+          .eq("salon_id", salonData.id),
+        supabase
+          .from("staff")
+          .select("id", { count: "exact", head: true })
+          .eq("salon_id", salonData.id)
+          .eq("is_active", true),
+      ]);
+
+      if (cancelled) return;
+
+      setSalon(salonData);
+      setBookings((bookingsRes.data as BookingRow[] | null) ?? []);
+      setStaffCount(staffRes.count ?? 0);
+      setLoading(false);
+    }
+
+    loadAdminData();
+
+    return () => {
+      cancelled = true;
+    };
+  }, [router]);
+
+  const today = getTodayKey();
+
+  const calendarBookings = useMemo(
+    () => bookings.map(bookingToCalendar),
+    [bookings],
   );
+
+  const todayBookings = useMemo(
+    () =>
+      calendarBookings.filter(
+        (b) => b.date === today && b.status !== "kansellert",
+      ),
+    [calendarBookings, today],
+  );
+
+  const { monday, sunday } = getWeekBounds();
+
+  const weeklyRevenue = useMemo(() => {
+    return bookings
+      .filter((b) => {
+        const start = new Date(b.starts_at);
+        return (
+          start >= monday &&
+          start <= sunday &&
+          (b.status === "confirmed" || b.status === "completed") &&
+          b.price_nok != null
+        );
+      })
+      .reduce((sum, b) => sum + (b.price_nok ?? 0), 0);
+  }, [bookings, monday, sunday]);
+
+  const occupancy = useMemo(() => {
+    const availableSlots = countWeekdaySlots(staffCount);
+    const weekBookings = bookings.filter((b) => {
+      const start = new Date(b.starts_at);
+      return start >= monday && start <= sunday && b.status !== "cancelled";
+    });
+    if (availableSlots === 0) return 0;
+    return Math.round((weekBookings.length / availableSlots) * 100);
+  }, [bookings, monday, sunday, staffCount]);
+
+  const activeCustomers = useMemo(
+    () => new Set(bookings.map((b) => b.client_phone)).size,
+    [bookings],
+  );
+
+  const clients = useMemo(() => {
+    const map = new Map<string, ClientRow>();
+    for (const b of bookings) {
+      const existing = map.get(b.client_phone);
+      if (!existing) {
+        map.set(b.client_phone, {
+          id: b.client_phone,
+          name: b.client_name,
+          phone: b.client_phone,
+          visits: 1,
+          lastVisit: b.starts_at,
+        });
+      } else {
+        existing.visits++;
+        if (new Date(b.starts_at) > new Date(existing.lastVisit)) {
+          existing.lastVisit = b.starts_at;
+        }
+        if (b.client_name.length > existing.name.length) {
+          existing.name = b.client_name;
+        }
+      }
+    }
+    return Array.from(map.values()).sort(
+      (a, b) => new Date(b.lastVisit).getTime() - new Date(a.lastVisit).getTime(),
+    );
+  }, [bookings]);
+
+  const latestBooking = useMemo(() => {
+    return [...bookings]
+      .filter((b) => b.status === "pending" || b.status === "confirmed")
+      .sort(
+        (a, b) =>
+          new Date(b.created_at).getTime() - new Date(a.created_at).getTime(),
+      )[0];
+  }, [bookings]);
 
   const viewYear = viewDate.getFullYear();
   const viewMonth = viewDate.getMonth();
@@ -136,7 +329,7 @@ export default function AdminPage() {
 
   const bookingsByDate = useMemo(() => {
     const map = new Map<string, CalendarBooking[]>();
-    for (const b of MOCK_BOOKINGS) {
+    for (const b of calendarBookings) {
       const list = map.get(b.date) ?? [];
       list.push(b);
       map.set(b.date, list);
@@ -145,13 +338,11 @@ export default function AdminPage() {
       list.sort((a, b) => a.time.localeCompare(b.time));
     }
     return map;
-  }, []);
+  }, [calendarBookings]);
 
-  const selectedBookings = selectedDay ? (bookingsByDate.get(selectedDay) ?? []) : [];
-
-  function serviceName(id: string) {
-    return demoServices.find((s) => s.id === id)?.name ?? id;
-  }
+  const selectedBookings = selectedDay
+    ? (bookingsByDate.get(selectedDay) ?? [])
+    : [];
 
   function prevMonth() {
     setViewDate((d) => new Date(d.getFullYear(), d.getMonth() - 1, 1));
@@ -164,8 +355,33 @@ export default function AdminPage() {
   }
 
   function goToToday() {
-    setViewDate(new Date(2026, 5, 1));
+    const now = new Date();
+    setViewDate(new Date(now.getFullYear(), now.getMonth(), 1));
     setSelectedDay(today);
+  }
+
+  if (loading) {
+    return (
+      <div className="flex min-h-screen flex-col items-center justify-center bg-[#e8f5ef] font-sans text-[#0D3B2E]">
+        <Logo />
+        <p className="mt-6 text-sm text-[#4A6B5E]">Laster adminpanel…</p>
+      </div>
+    );
+  }
+
+  if (!salon) {
+    return (
+      <div className="flex min-h-screen flex-col items-center justify-center bg-[#e8f5ef] font-sans text-[#0D3B2E]">
+        <Logo />
+        <p className="mt-6 text-sm text-[#4A6B5E]">Ingen bedrift funnet</p>
+        <a
+          href="/auth/register"
+          className="mt-4 text-sm font-semibold text-[#0F6E56] hover:underline"
+        >
+          Opprett bedrift →
+        </a>
+      </div>
+    );
   }
 
   return (
@@ -192,7 +408,7 @@ export default function AdminPage() {
         </nav>
         <div className="border-t border-white/15 p-4">
           <p className="text-xs font-bold text-[#5DCAA5]">{FREE_TRIAL_MONTHS} mnd gratis</p>
-          <p className="text-[10px] text-white/60">{demoBusiness.name}</p>
+          <p className="text-[10px] text-white/60">{salon.name}</p>
         </div>
       </aside>
 
@@ -203,35 +419,48 @@ export default function AdminPage() {
             {TABS.find((t) => t.id === tab)?.label}
           </h1>
           <a
-            href={`/${demoBusiness.slug}`}
+            href={`/${salon.slug}`}
             target="_blank"
+            rel="noopener noreferrer"
             className="text-xs font-semibold text-[#0F6E56] hover:underline"
           >
-            {demoBusiness.slug}.bookti.no ↗
+            {salon.slug}.bookti.no ↗
           </a>
         </header>
 
         <div className="p-8">
           {tab === "calendar" && (
             <>
-              <div
-                className="mb-6 flex items-center gap-3 rounded-xl border border-[#0F6E56]/20 bg-white px-4 py-3 text-sm text-[#0F6E56] shadow-sm transition-all duration-500"
-                style={{ opacity: notifVisible ? 1 : 0 }}
-              >
-                <span className="text-xl">🔔</span>
-                <div>
-                  <div className="font-bold">{no.dashboard.newBooking}</div>
-                  <div className="text-xs opacity-60">Sara Andersen — kl. 15:30 · Vipps betalt</div>
+              {latestBooking && (
+                <div
+                  className="mb-6 flex items-center gap-3 rounded-xl border border-[#0F6E56]/20 bg-white px-4 py-3 text-sm text-[#0F6E56] shadow-sm transition-all duration-500"
+                  style={{ opacity: notifVisible ? 1 : 0 }}
+                >
+                  <span className="text-xl">🔔</span>
+                  <div>
+                    <div className="font-bold">{no.dashboard.newBooking}</div>
+                    <div className="text-xs opacity-60">
+                      {latestBooking.client_name} — kl.{" "}
+                      {new Date(latestBooking.starts_at).toLocaleTimeString("nb-NO", {
+                        hour: "2-digit",
+                        minute: "2-digit",
+                        hour12: false,
+                      })}
+                      {latestBooking.services?.name
+                        ? ` · ${latestBooking.services.name}`
+                        : ""}
+                    </div>
+                  </div>
+                  <span className="ml-auto text-xs opacity-40">ny</span>
                 </div>
-                <span className="ml-auto text-xs opacity-40">akkurat nå</span>
-              </div>
+              )}
 
               <div className="mb-6 grid grid-cols-2 gap-3 sm:grid-cols-4">
                 {[
                   { label: no.dashboard.appointmentsToday, val: String(todayBookings.length) },
-                  { label: no.dashboard.weeklyRevenue, val: formatNok(680000) },
-                  { label: no.dashboard.occupancy, val: "87%" },
-                  { label: no.dashboard.activeCustomers, val: String(demoClients.length) },
+                  { label: no.dashboard.weeklyRevenue, val: formatPriceNok(weeklyRevenue) },
+                  { label: no.dashboard.occupancy, val: `${occupancy}%` },
+                  { label: no.dashboard.activeCustomers, val: String(activeCustomers) },
                 ].map(({ label, val }) => (
                   <div key={label} className="rounded-xl border-l-[3px] border-l-[#0F6E56] bg-white p-4 shadow-sm">
                     <div className="text-xs text-[#1a5c47]">{label}</div>
@@ -387,7 +616,7 @@ export default function AdminPage() {
                                   {b.customerName}
                                 </div>
                                 <div className="text-xs text-[#1a3d30]">
-                                  {serviceName(b.serviceId)}
+                                  {b.serviceName}
                                 </div>
                                 <div className="mt-1 text-xs text-[#1a3d30]">
                                   <span className="opacity-70">Ansatt: </span>
@@ -407,26 +636,32 @@ export default function AdminPage() {
 
           {tab === "clients" && (
             <div className="overflow-hidden rounded-xl border border-[#C8E6D8] bg-white shadow-sm">
-              <table className="w-full text-sm">
-                <thead>
-                  <tr className="border-b border-[#C8E6D8] bg-[#f0faf6] text-left text-xs text-[#0F6E56]">
-                    <th className="px-4 py-3 font-bold">Navn</th>
-                    <th className="px-4 py-3 font-bold">Telefon</th>
-                    <th className="px-4 py-3 font-bold">Besøk</th>
-                    <th className="px-4 py-3 font-bold">Sist</th>
-                  </tr>
-                </thead>
-                <tbody>
-                  {demoClients.map((c) => (
-                    <tr key={c.id} className="border-b border-[#C8E6D8] last:border-0">
-                      <td className="px-4 py-3 font-semibold">{c.name}</td>
-                      <td className="px-4 py-3 text-[#4A6B5E]">{c.phone}</td>
-                      <td className="px-4 py-3 text-[#0F6E56] font-bold">{c.visits}</td>
-                      <td className="px-4 py-3 text-[#7A9A8E]">{c.lastVisit}</td>
+              {clients.length === 0 ? (
+                <p className="px-4 py-8 text-center text-sm text-[#7A9A8E]">
+                  Ingen kunder ennå
+                </p>
+              ) : (
+                <table className="w-full text-sm">
+                  <thead>
+                    <tr className="border-b border-[#C8E6D8] bg-[#f0faf6] text-left text-xs text-[#0F6E56]">
+                      <th className="px-4 py-3 font-bold">Navn</th>
+                      <th className="px-4 py-3 font-bold">Telefon</th>
+                      <th className="px-4 py-3 font-bold">Besøk</th>
+                      <th className="px-4 py-3 font-bold">Sist</th>
                     </tr>
-                  ))}
-                </tbody>
-              </table>
+                  </thead>
+                  <tbody>
+                    {clients.map((c) => (
+                      <tr key={c.id} className="border-b border-[#C8E6D8] last:border-0">
+                        <td className="px-4 py-3 font-semibold">{c.name}</td>
+                        <td className="px-4 py-3 text-[#4A6B5E]">{c.phone}</td>
+                        <td className="px-4 py-3 text-[#0F6E56] font-bold">{c.visits}</td>
+                        <td className="px-4 py-3 text-[#7A9A8E]">{formatDateShort(c.lastVisit)}</td>
+                      </tr>
+                    ))}
+                  </tbody>
+                </table>
+              )}
             </div>
           )}
 
@@ -438,26 +673,29 @@ export default function AdminPage() {
                 </button>
               </div>
               <div className="space-y-2">
-                {demoInvoices.map((inv) => (
-                  <div
-                    key={inv.id}
-                    className="flex items-center gap-4 rounded-xl border border-[#C8E6D8] bg-white px-4 py-3 shadow-sm"
-                  >
-                    <span className="font-mono text-sm font-bold text-[#0F6E56]">#{inv.number}</span>
-                    <span className="flex-1 text-sm font-semibold">{inv.client}</span>
-                    <span className="text-sm font-bold">{formatNok(inv.amountOre)}</span>
-                    <span className="text-xs text-[#7A9A8E]">{inv.date}</span>
-                    <span
-                      className={`rounded-full px-2.5 py-0.5 text-[10px] font-bold ${
-                        inv.status === "betalt"
-                          ? "bg-[#0F6E56]/10 text-[#0F6E56]"
-                          : "bg-orange-50 text-orange-600"
-                      }`}
+                {bookings
+                  .filter((b) => b.status === "completed" && b.price_nok != null)
+                  .map((inv) => (
+                    <div
+                      key={inv.id}
+                      className="flex items-center gap-4 rounded-xl border border-[#C8E6D8] bg-white px-4 py-3 shadow-sm"
                     >
-                      {inv.status}
-                    </span>
-                  </div>
-                ))}
+                      <span className="font-mono text-sm font-bold text-[#0F6E56]">
+                        #{inv.id.slice(0, 8)}
+                      </span>
+                      <span className="flex-1 text-sm font-semibold">{inv.client_name}</span>
+                      <span className="text-sm font-bold">{formatPriceNok(inv.price_nok!)}</span>
+                      <span className="text-xs text-[#7A9A8E]">{formatDateShort(inv.starts_at)}</span>
+                      <span className="rounded-full bg-[#0F6E56]/10 px-2.5 py-0.5 text-[10px] font-bold text-[#0F6E56]">
+                        betalt
+                      </span>
+                    </div>
+                  ))}
+                {bookings.filter((b) => b.status === "completed").length === 0 && (
+                  <p className="py-8 text-center text-sm text-[#7A9A8E]">
+                    Ingen fakturaer ennå
+                  </p>
+                )}
               </div>
             </>
           )}
@@ -467,11 +705,13 @@ export default function AdminPage() {
               <section className="rounded-xl border border-[#C8E6D8] bg-white p-5 shadow-sm">
                 <h3 className="mb-4 text-sm font-bold text-[#0F6E56]">{no.admin.businessSettings}</h3>
                 {[
-                  { label: "Bedriftsnavn", value: demoBusiness.name },
-                  { label: "Org.nr", value: demoBusiness.orgNumber },
-                  { label: "E-post", value: demoBusiness.email },
-                  { label: "Telefon", value: demoBusiness.phone },
-                  { label: "Adresse", value: `${demoBusiness.address}, ${demoBusiness.postalCode} ${demoBusiness.city}` },
+                  { label: "Bedriftsnavn", value: salon.name },
+                  { label: "E-post", value: salon.email ?? "—" },
+                  { label: "Telefon", value: salon.phone ?? "—" },
+                  {
+                    label: "Adresse",
+                    value: [salon.address, salon.city].filter(Boolean).join(", ") || "—",
+                  },
                 ].map(({ label, value }) => (
                   <div key={label} className="mb-3">
                     <label className="text-xs font-bold text-[#7A9A8E]">{label}</label>
@@ -496,7 +736,8 @@ export default function AdminPage() {
                   ))}
                 </div>
                 <p className="mt-3 text-xs text-[#7A9A8E]">
-                  Vipps MSN: {demoBusiness.vippsMerchantId} · Stripe: demo-modus
+                  Plan: {salon.plan}
+                  {salon.stripe_customer_id ? ` · Stripe: ${salon.stripe_customer_id}` : ""}
                 </p>
               </section>
 
