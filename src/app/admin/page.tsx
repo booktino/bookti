@@ -1365,16 +1365,16 @@ export default function AdminPage() {
 
           {tab === "settings" && (
             <div className="max-w-2xl">
-              <div className="mb-6 flex flex-wrap gap-1">
+              <div className="mb-6 flex flex-wrap border-b-2 border-[#e5e7eb] bg-white">
                 {SETTINGS_TABS.map((st) => (
                   <button
                     key={st.id}
                     type="button"
                     onClick={() => setSettingsTab(st.id)}
-                    className={`rounded-lg px-4 py-2 text-sm font-semibold transition-colors ${
+                    className={`bg-white px-5 py-3 text-sm transition-colors ${
                       settingsTab === st.id
-                        ? "bg-[#0F6E56] text-white"
-                        : "bg-[#e8e8e8] text-[#0D3B2E] hover:bg-[#d8d8d8]"
+                        ? "-mb-[2px] border-b-2 border-[#0F6E56] font-semibold text-[#0F6E56]"
+                        : "border-b-2 border-transparent text-[#6b7280] hover:text-[#0F6E56]"
                     }`}
                   >
                     {st.label}
