@@ -9,9 +9,11 @@ import { createClient } from "@/lib/supabase";
 import { PAYMENT_OPTIONS } from "@/lib/payments/methods";
 import { FREE_TRIAL_MONTHS } from "@/lib/pricing/plans";
 
-type AdminTab = "calendar" | "clients" | "invoices" | "settings";
+type AdminTab = "calendar" | "services" | "staff" | "clients" | "invoices" | "settings";
 
 type Salon = Database["public"]["Tables"]["salons"]["Row"];
+type Service = Database["public"]["Tables"]["services"]["Row"];
+type Staff = Database["public"]["Tables"]["staff"]["Row"];
 
 type BookingRow = Database["public"]["Tables"]["bookings"]["Row"] & {
   staff: { name: string } | null;
@@ -34,8 +36,39 @@ type ClientRow = {
   id: string;
   name: string;
   phone: string;
+  email: string | null;
   visits: number;
   lastVisit: string;
+};
+
+type ServiceForm = {
+  name: string;
+  description: string;
+  duration_min: string;
+  price_nok: string;
+  is_active: boolean;
+};
+
+type StaffForm = {
+  name: string;
+  title: string;
+  phone: string;
+  is_active: boolean;
+};
+
+const EMPTY_SERVICE_FORM: ServiceForm = {
+  name: "",
+  description: "",
+  duration_min: "60",
+  price_nok: "0",
+  is_active: true,
+};
+
+const EMPTY_STAFF_FORM: StaffForm = {
+  name: "",
+  title: "",
+  phone: "",
+  is_active: true,
 };
 
 const NORWEGIAN_MONTHS = [
@@ -160,10 +193,27 @@ const STATUS_LABELS: Record<CalendarBookingStatus, string> = {
 
 const TABS: { id: AdminTab; label: string; icon: string }[] = [
   { id: "calendar", label: no.admin.calendar, icon: "📅" },
+  { id: "services", label: no.admin.services, icon: "✂️" },
+  { id: "staff", label: no.admin.staff, icon: "👤" },
   { id: "clients", label: no.admin.clients, icon: "👥" },
   { id: "invoices", label: no.admin.invoices, icon: "🧾" },
   { id: "settings", label: no.admin.settings, icon: "⚙️" },
 ];
+
+const inputClass =
+  "mt-1 w-full rounded-lg border border-[#C8E6D8] bg-white px-3 py-2 text-sm outline-none focus:border-[#0F6E56] focus:ring-2 focus:ring-[#0F6E56]/20";
+
+function ActiveBadge({ active }: { active: boolean }) {
+  return (
+    <span
+      className={`rounded-full px-2.5 py-0.5 text-[10px] font-bold ${
+        active ? "bg-[#0F6E56]/10 text-[#0F6E56]" : "bg-[#fee2e2] text-[#dc2626]"
+      }`}
+    >
+      {active ? "Aktiv" : "Inaktiv"}
+    </span>
+  );
+}
 
 export default function AdminPage() {
   const router = useRouter();
@@ -174,7 +224,21 @@ export default function AdminPage() {
   const [loading, setLoading] = useState(true);
   const [salon, setSalon] = useState<Salon | null>(null);
   const [bookings, setBookings] = useState<BookingRow[]>([]);
+  const [services, setServices] = useState<Service[]>([]);
+  const [staffList, setStaffList] = useState<Staff[]>([]);
   const [staffCount, setStaffCount] = useState(0);
+
+  const [serviceModalOpen, setServiceModalOpen] = useState(false);
+  const [editingService, setEditingService] = useState<Service | null>(null);
+  const [serviceForm, setServiceForm] = useState<ServiceForm>(EMPTY_SERVICE_FORM);
+  const [serviceSaving, setServiceSaving] = useState(false);
+  const [deleteServiceId, setDeleteServiceId] = useState<string | null>(null);
+
+  const [staffModalOpen, setStaffModalOpen] = useState(false);
+  const [editingStaff, setEditingStaff] = useState<Staff | null>(null);
+  const [staffForm, setStaffForm] = useState<StaffForm>(EMPTY_STAFF_FORM);
+  const [staffSaving, setStaffSaving] = useState(false);
+  const [deleteStaffId, setDeleteStaffId] = useState<string | null>(null);
 
   useEffect(() => {
     const id = setInterval(() => setNotifVisible((v) => !v), 2800);
@@ -211,23 +275,32 @@ export default function AdminPage() {
         return;
       }
 
-      const [bookingsRes, staffRes] = await Promise.all([
+      const [bookingsRes, servicesRes, staffRes] = await Promise.all([
         supabase
           .from("bookings")
           .select("*, staff(name), services(name)")
           .eq("salon_id", salonData.id),
         supabase
-          .from("staff")
-          .select("id", { count: "exact", head: true })
+          .from("services")
+          .select("*")
           .eq("salon_id", salonData.id)
-          .eq("is_active", true),
+          .order("display_order"),
+        supabase
+          .from("staff")
+          .select("*")
+          .eq("salon_id", salonData.id)
+          .order("display_order"),
       ]);
 
       if (cancelled) return;
 
+      const staffRows = staffRes.data ?? [];
+
       setSalon(salonData);
       setBookings((bookingsRes.data as BookingRow[] | null) ?? []);
-      setStaffCount(staffRes.count ?? 0);
+      setServices(servicesRes.data ?? []);
+      setStaffList(staffRows);
+      setStaffCount(staffRows.filter((s) => s.is_active).length);
       setLoading(false);
     }
 
@@ -293,6 +366,7 @@ export default function AdminPage() {
           id: b.client_phone,
           name: b.client_name,
           phone: b.client_phone,
+          email: b.client_email,
           visits: 1,
           lastVisit: b.starts_at,
         });
@@ -304,11 +378,12 @@ export default function AdminPage() {
         if (b.client_name.length > existing.name.length) {
           existing.name = b.client_name;
         }
+        if (!existing.email && b.client_email) {
+          existing.email = b.client_email;
+        }
       }
     }
-    return Array.from(map.values()).sort(
-      (a, b) => new Date(b.lastVisit).getTime() - new Date(a.lastVisit).getTime(),
-    );
+    return Array.from(map.values()).sort((a, b) => b.visits - a.visits);
   }, [bookings]);
 
   const latestBooking = useMemo(() => {
@@ -358,6 +433,172 @@ export default function AdminPage() {
     const now = new Date();
     setViewDate(new Date(now.getFullYear(), now.getMonth(), 1));
     setSelectedDay(today);
+  }
+
+  function openAddService() {
+    setEditingService(null);
+    setServiceForm(EMPTY_SERVICE_FORM);
+    setServiceModalOpen(true);
+  }
+
+  function openEditService(service: Service) {
+    setEditingService(service);
+    setServiceForm({
+      name: service.name,
+      description: service.description ?? "",
+      duration_min: String(service.duration_min),
+      price_nok: String(service.price_nok),
+      is_active: service.is_active,
+    });
+    setServiceModalOpen(true);
+  }
+
+  function closeServiceModal() {
+    setServiceModalOpen(false);
+    setEditingService(null);
+    setServiceForm(EMPTY_SERVICE_FORM);
+  }
+
+  async function saveService(e: React.FormEvent) {
+    e.preventDefault();
+    if (!salon || !serviceForm.name.trim()) return;
+
+    setServiceSaving(true);
+    const supabase = createClient();
+    const payload = {
+      name: serviceForm.name.trim(),
+      description: serviceForm.description.trim() || null,
+      duration_min: Math.max(1, parseInt(serviceForm.duration_min, 10) || 60),
+      price_nok: Math.max(0, parseInt(serviceForm.price_nok, 10) || 0),
+      is_active: serviceForm.is_active,
+    };
+
+    if (editingService) {
+      const { data, error } = await supabase
+        .from("services")
+        .update(payload)
+        .eq("id", editingService.id)
+        .select()
+        .single();
+
+      if (!error && data) {
+        setServices((prev) => prev.map((s) => (s.id === data.id ? data : s)));
+      }
+    } else {
+      const { data, error } = await supabase
+        .from("services")
+        .insert({
+          salon_id: salon.id,
+          ...payload,
+          color: "#0F6E56",
+          display_order: services.length,
+        })
+        .select()
+        .single();
+
+      if (!error && data) {
+        setServices((prev) => [...prev, data]);
+      }
+    }
+
+    setServiceSaving(false);
+    closeServiceModal();
+  }
+
+  async function confirmDeleteService() {
+    if (!deleteServiceId) return;
+    const supabase = createClient();
+    const { error } = await supabase.from("services").delete().eq("id", deleteServiceId);
+    if (!error) {
+      setServices((prev) => prev.filter((s) => s.id !== deleteServiceId));
+    }
+    setDeleteServiceId(null);
+  }
+
+  function openAddStaff() {
+    setEditingStaff(null);
+    setStaffForm(EMPTY_STAFF_FORM);
+    setStaffModalOpen(true);
+  }
+
+  function openEditStaff(member: Staff) {
+    setEditingStaff(member);
+    setStaffForm({
+      name: member.name,
+      title: member.title ?? "",
+      phone: member.phone ?? "",
+      is_active: member.is_active,
+    });
+    setStaffModalOpen(true);
+  }
+
+  function closeStaffModal() {
+    setStaffModalOpen(false);
+    setEditingStaff(null);
+    setStaffForm(EMPTY_STAFF_FORM);
+  }
+
+  async function saveStaff(e: React.FormEvent) {
+    e.preventDefault();
+    if (!salon || !staffForm.name.trim()) return;
+
+    setStaffSaving(true);
+    const supabase = createClient();
+    const payload = {
+      name: staffForm.name.trim(),
+      title: staffForm.title.trim() || null,
+      phone: staffForm.phone.trim() || null,
+      is_active: staffForm.is_active,
+    };
+
+    if (editingStaff) {
+      const { data, error } = await supabase
+        .from("staff")
+        .update(payload)
+        .eq("id", editingStaff.id)
+        .select()
+        .single();
+
+      if (!error && data) {
+        setStaffList((prev) => {
+          const next = prev.map((s) => (s.id === data.id ? data : s));
+          setStaffCount(next.filter((s) => s.is_active).length);
+          return next;
+        });
+      }
+    } else {
+      const { data, error } = await supabase
+        .from("staff")
+        .insert({
+          salon_id: salon.id,
+          ...payload,
+          color: "#0F6E56",
+          display_order: staffList.length,
+        })
+        .select()
+        .single();
+
+      if (!error && data) {
+        const next = [...staffList, data];
+        setStaffList(next);
+        setStaffCount(next.filter((s) => s.is_active).length);
+      }
+    }
+
+    setStaffSaving(false);
+    closeStaffModal();
+  }
+
+  async function confirmDeleteStaff() {
+    if (!deleteStaffId) return;
+    const supabase = createClient();
+    const { error } = await supabase.from("staff").delete().eq("id", deleteStaffId);
+    if (!error) {
+      const next = staffList.filter((s) => s.id !== deleteStaffId);
+      setStaffList(next);
+      setStaffCount(next.filter((s) => s.is_active).length);
+    }
+    setDeleteStaffId(null);
   }
 
   if (loading) {
@@ -634,6 +875,128 @@ export default function AdminPage() {
             </>
           )}
 
+          {tab === "services" && (
+            <>
+              <div className="mb-4 flex justify-end">
+                <button
+                  onClick={openAddService}
+                  className="btn-primary rounded-lg px-4 py-2 text-xs font-bold text-white"
+                >
+                  Legg til tjeneste
+                </button>
+              </div>
+              <div className="overflow-hidden rounded-xl border border-[#C8E6D8] bg-white shadow-sm">
+                {services.length === 0 ? (
+                  <p className="px-4 py-8 text-center text-sm text-[#7A9A8E]">
+                    Ingen tjenester ennå
+                  </p>
+                ) : (
+                  <table className="w-full text-sm">
+                    <thead>
+                      <tr className="border-b border-[#C8E6D8] bg-[#f0faf6] text-left text-xs text-[#0F6E56]">
+                        <th className="px-4 py-3 font-bold">Navn</th>
+                        <th className="px-4 py-3 font-bold">Beskrivelse</th>
+                        <th className="px-4 py-3 font-bold">Varighet</th>
+                        <th className="px-4 py-3 font-bold">Pris</th>
+                        <th className="px-4 py-3 font-bold">Status</th>
+                        <th className="px-4 py-3 font-bold text-right">Handlinger</th>
+                      </tr>
+                    </thead>
+                    <tbody>
+                      {services.map((service) => (
+                        <tr key={service.id} className="border-b border-[#C8E6D8] last:border-0">
+                          <td className="px-4 py-3 font-semibold">{service.name}</td>
+                          <td className="max-w-[12rem] truncate px-4 py-3 text-[#4A6B5E]">
+                            {service.description ?? "—"}
+                          </td>
+                          <td className="px-4 py-3 text-[#4A6B5E]">{service.duration_min} min</td>
+                          <td className="px-4 py-3 font-bold text-[#0F6E56]">
+                            {formatPriceNok(service.price_nok)}
+                          </td>
+                          <td className="px-4 py-3">
+                            <ActiveBadge active={service.is_active} />
+                          </td>
+                          <td className="px-4 py-3 text-right">
+                            <button
+                              onClick={() => openEditService(service)}
+                              className="mr-2 rounded-lg border border-[#C8E6D8] px-2.5 py-1 text-xs font-bold text-[#0F6E56] hover:bg-[#d1f0e4]"
+                            >
+                              Rediger
+                            </button>
+                            <button
+                              onClick={() => setDeleteServiceId(service.id)}
+                              className="rounded-lg border border-[#fee2e2] px-2.5 py-1 text-xs font-bold text-[#dc2626] hover:bg-[#fee2e2]"
+                            >
+                              Slett
+                            </button>
+                          </td>
+                        </tr>
+                      ))}
+                    </tbody>
+                  </table>
+                )}
+              </div>
+            </>
+          )}
+
+          {tab === "staff" && (
+            <>
+              <div className="mb-4 flex justify-end">
+                <button
+                  onClick={openAddStaff}
+                  className="btn-primary rounded-lg px-4 py-2 text-xs font-bold text-white"
+                >
+                  Legg til ansatt
+                </button>
+              </div>
+              <div className="overflow-hidden rounded-xl border border-[#C8E6D8] bg-white shadow-sm">
+                {staffList.length === 0 ? (
+                  <p className="px-4 py-8 text-center text-sm text-[#7A9A8E]">
+                    Ingen ansatte ennå
+                  </p>
+                ) : (
+                  <table className="w-full text-sm">
+                    <thead>
+                      <tr className="border-b border-[#C8E6D8] bg-[#f0faf6] text-left text-xs text-[#0F6E56]">
+                        <th className="px-4 py-3 font-bold">Navn</th>
+                        <th className="px-4 py-3 font-bold">Tittel</th>
+                        <th className="px-4 py-3 font-bold">Telefon</th>
+                        <th className="px-4 py-3 font-bold">Status</th>
+                        <th className="px-4 py-3 font-bold text-right">Handlinger</th>
+                      </tr>
+                    </thead>
+                    <tbody>
+                      {staffList.map((member) => (
+                        <tr key={member.id} className="border-b border-[#C8E6D8] last:border-0">
+                          <td className="px-4 py-3 font-semibold">{member.name}</td>
+                          <td className="px-4 py-3 text-[#4A6B5E]">{member.title ?? "—"}</td>
+                          <td className="px-4 py-3 text-[#4A6B5E]">{member.phone ?? "—"}</td>
+                          <td className="px-4 py-3">
+                            <ActiveBadge active={member.is_active} />
+                          </td>
+                          <td className="px-4 py-3 text-right">
+                            <button
+                              onClick={() => openEditStaff(member)}
+                              className="mr-2 rounded-lg border border-[#C8E6D8] px-2.5 py-1 text-xs font-bold text-[#0F6E56] hover:bg-[#d1f0e4]"
+                            >
+                              Rediger
+                            </button>
+                            <button
+                              onClick={() => setDeleteStaffId(member.id)}
+                              className="rounded-lg border border-[#fee2e2] px-2.5 py-1 text-xs font-bold text-[#dc2626] hover:bg-[#fee2e2]"
+                            >
+                              Slett
+                            </button>
+                          </td>
+                        </tr>
+                      ))}
+                    </tbody>
+                  </table>
+                )}
+              </div>
+            </>
+          )}
+
           {tab === "clients" && (
             <div className="overflow-hidden rounded-xl border border-[#C8E6D8] bg-white shadow-sm">
               {clients.length === 0 ? (
@@ -646,6 +1009,7 @@ export default function AdminPage() {
                     <tr className="border-b border-[#C8E6D8] bg-[#f0faf6] text-left text-xs text-[#0F6E56]">
                       <th className="px-4 py-3 font-bold">Navn</th>
                       <th className="px-4 py-3 font-bold">Telefon</th>
+                      <th className="px-4 py-3 font-bold">E-post</th>
                       <th className="px-4 py-3 font-bold">Besøk</th>
                       <th className="px-4 py-3 font-bold">Sist</th>
                     </tr>
@@ -655,7 +1019,8 @@ export default function AdminPage() {
                       <tr key={c.id} className="border-b border-[#C8E6D8] last:border-0">
                         <td className="px-4 py-3 font-semibold">{c.name}</td>
                         <td className="px-4 py-3 text-[#4A6B5E]">{c.phone}</td>
-                        <td className="px-4 py-3 text-[#0F6E56] font-bold">{c.visits}</td>
+                        <td className="px-4 py-3 text-[#4A6B5E]">{c.email ?? "—"}</td>
+                        <td className="px-4 py-3 font-bold text-[#0F6E56]">{c.visits}</td>
                         <td className="px-4 py-3 text-[#7A9A8E]">{formatDateShort(c.lastVisit)}</td>
                       </tr>
                     ))}
@@ -758,6 +1123,216 @@ export default function AdminPage() {
           )}
         </div>
       </main>
+
+      {serviceModalOpen && (
+        <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/30 p-4">
+          <div className="w-full max-w-md rounded-xl border border-[#C8E6D8] bg-white shadow-xl">
+            <div className="flex items-center justify-between border-b border-[#C8E6D8] px-5 py-4">
+              <h3 className="text-sm font-bold text-[#0F6E56]">
+                {editingService ? "Rediger tjeneste" : "Legg til tjeneste"}
+              </h3>
+              <button
+                onClick={closeServiceModal}
+                className="flex h-8 w-8 items-center justify-center rounded-lg text-[#7A9A8E] hover:bg-[#d1f0e4]"
+                aria-label="Lukk"
+              >
+                ✕
+              </button>
+            </div>
+            <form onSubmit={saveService} className="space-y-4 p-5">
+              <div>
+                <label className="text-xs font-bold text-[#7A9A8E]">Navn</label>
+                <input
+                  required
+                  value={serviceForm.name}
+                  onChange={(e) => setServiceForm((f) => ({ ...f, name: e.target.value }))}
+                  className={inputClass}
+                />
+              </div>
+              <div>
+                <label className="text-xs font-bold text-[#7A9A8E]">Beskrivelse</label>
+                <textarea
+                  value={serviceForm.description}
+                  onChange={(e) => setServiceForm((f) => ({ ...f, description: e.target.value }))}
+                  rows={3}
+                  className={inputClass}
+                />
+              </div>
+              <div className="grid grid-cols-2 gap-3">
+                <div>
+                  <label className="text-xs font-bold text-[#7A9A8E]">Varighet (min)</label>
+                  <input
+                    required
+                    type="number"
+                    min={1}
+                    value={serviceForm.duration_min}
+                    onChange={(e) => setServiceForm((f) => ({ ...f, duration_min: e.target.value }))}
+                    className={inputClass}
+                  />
+                </div>
+                <div>
+                  <label className="text-xs font-bold text-[#7A9A8E]">Pris (NOK)</label>
+                  <input
+                    required
+                    type="number"
+                    min={0}
+                    value={serviceForm.price_nok}
+                    onChange={(e) => setServiceForm((f) => ({ ...f, price_nok: e.target.value }))}
+                    className={inputClass}
+                  />
+                </div>
+              </div>
+              <label className="flex items-center gap-3 text-sm font-semibold">
+                <input
+                  type="checkbox"
+                  checked={serviceForm.is_active}
+                  onChange={(e) => setServiceForm((f) => ({ ...f, is_active: e.target.checked }))}
+                  className="accent-[#0F6E56]"
+                />
+                Aktiv
+              </label>
+              <div className="flex gap-2 pt-2">
+                <button
+                  type="button"
+                  onClick={closeServiceModal}
+                  className="flex-1 rounded-lg border border-[#C8E6D8] py-2.5 text-sm font-bold text-[#4A6B5E] hover:bg-[#EFF8F4]"
+                >
+                  {no.common.cancel}
+                </button>
+                <button
+                  type="submit"
+                  disabled={serviceSaving}
+                  className="btn-primary flex-1 rounded-lg py-2.5 text-sm font-bold text-white disabled:opacity-60"
+                >
+                  {serviceSaving ? no.common.loading : no.common.confirm}
+                </button>
+              </div>
+            </form>
+          </div>
+        </div>
+      )}
+
+      {staffModalOpen && (
+        <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/30 p-4">
+          <div className="w-full max-w-md rounded-xl border border-[#C8E6D8] bg-white shadow-xl">
+            <div className="flex items-center justify-between border-b border-[#C8E6D8] px-5 py-4">
+              <h3 className="text-sm font-bold text-[#0F6E56]">
+                {editingStaff ? "Rediger ansatt" : "Legg til ansatt"}
+              </h3>
+              <button
+                onClick={closeStaffModal}
+                className="flex h-8 w-8 items-center justify-center rounded-lg text-[#7A9A8E] hover:bg-[#d1f0e4]"
+                aria-label="Lukk"
+              >
+                ✕
+              </button>
+            </div>
+            <form onSubmit={saveStaff} className="space-y-4 p-5">
+              <div>
+                <label className="text-xs font-bold text-[#7A9A8E]">Navn</label>
+                <input
+                  required
+                  value={staffForm.name}
+                  onChange={(e) => setStaffForm((f) => ({ ...f, name: e.target.value }))}
+                  className={inputClass}
+                />
+              </div>
+              <div>
+                <label className="text-xs font-bold text-[#7A9A8E]">Tittel</label>
+                <input
+                  value={staffForm.title}
+                  onChange={(e) => setStaffForm((f) => ({ ...f, title: e.target.value }))}
+                  className={inputClass}
+                />
+              </div>
+              <div>
+                <label className="text-xs font-bold text-[#7A9A8E]">Telefon</label>
+                <input
+                  type="tel"
+                  value={staffForm.phone}
+                  onChange={(e) => setStaffForm((f) => ({ ...f, phone: e.target.value }))}
+                  className={inputClass}
+                />
+              </div>
+              <label className="flex items-center gap-3 text-sm font-semibold">
+                <input
+                  type="checkbox"
+                  checked={staffForm.is_active}
+                  onChange={(e) => setStaffForm((f) => ({ ...f, is_active: e.target.checked }))}
+                  className="accent-[#0F6E56]"
+                />
+                Aktiv
+              </label>
+              <div className="flex gap-2 pt-2">
+                <button
+                  type="button"
+                  onClick={closeStaffModal}
+                  className="flex-1 rounded-lg border border-[#C8E6D8] py-2.5 text-sm font-bold text-[#4A6B5E] hover:bg-[#EFF8F4]"
+                >
+                  {no.common.cancel}
+                </button>
+                <button
+                  type="submit"
+                  disabled={staffSaving}
+                  className="btn-primary flex-1 rounded-lg py-2.5 text-sm font-bold text-white disabled:opacity-60"
+                >
+                  {staffSaving ? no.common.loading : no.common.confirm}
+                </button>
+              </div>
+            </form>
+          </div>
+        </div>
+      )}
+
+      {deleteServiceId && (
+        <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/30 p-4">
+          <div className="w-full max-w-sm rounded-xl border border-[#C8E6D8] bg-white p-5 shadow-xl">
+            <h3 className="text-sm font-bold text-[#0F6E56]">Slett tjeneste?</h3>
+            <p className="mt-2 text-sm text-[#4A6B5E]">
+              Denne handlingen kan ikke angres.
+            </p>
+            <div className="mt-4 flex gap-2">
+              <button
+                onClick={() => setDeleteServiceId(null)}
+                className="flex-1 rounded-lg border border-[#C8E6D8] py-2.5 text-sm font-bold text-[#4A6B5E] hover:bg-[#EFF8F4]"
+              >
+                {no.common.cancel}
+              </button>
+              <button
+                onClick={confirmDeleteService}
+                className="flex-1 rounded-lg bg-[#dc2626] py-2.5 text-sm font-bold text-white hover:bg-[#b91c1c]"
+              >
+                Slett
+              </button>
+            </div>
+          </div>
+        </div>
+      )}
+
+      {deleteStaffId && (
+        <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/30 p-4">
+          <div className="w-full max-w-sm rounded-xl border border-[#C8E6D8] bg-white p-5 shadow-xl">
+            <h3 className="text-sm font-bold text-[#0F6E56]">Slett ansatt?</h3>
+            <p className="mt-2 text-sm text-[#4A6B5E]">
+              Denne handlingen kan ikke angres.
+            </p>
+            <div className="mt-4 flex gap-2">
+              <button
+                onClick={() => setDeleteStaffId(null)}
+                className="flex-1 rounded-lg border border-[#C8E6D8] py-2.5 text-sm font-bold text-[#4A6B5E] hover:bg-[#EFF8F4]"
+              >
+                {no.common.cancel}
+              </button>
+              <button
+                onClick={confirmDeleteStaff}
+                className="flex-1 rounded-lg bg-[#dc2626] py-2.5 text-sm font-bold text-white hover:bg-[#b91c1c]"
+              >
+                Slett
+              </button>
+            </div>
+          </div>
+        </div>
+      )}
     </div>
   );
 }

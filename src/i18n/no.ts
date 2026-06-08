@@ -37,6 +37,8 @@ export const no = {
   },
   admin: {
     calendar: "Kalender",
+    services: "Tjenester",
+    staff: "Ansatte",
     clients: "Kunder",
     invoices: "Fakturaer",
     settings: "Innstillinger",
