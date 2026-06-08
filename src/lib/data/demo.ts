@@ -3,11 +3,11 @@ import type { Business, Service } from "../types/business";
 
 export const demoBusiness: Business = {
   id: "biz-demo-001",
-  slug: "salong-nord",
-  name: "Salong Nord",
+  slug: "din-bedrift",
+  name: "Frisør Nord AS",
   orgNumber: "923 456 789",
   mvaRegistered: true,
-  email: "hei@salongnord.no",
+  email: "hei@frisornord.no",
   phone: "+47 55 12 34 56",
   address: "Bryggen 12",
   postalCode: "5003",

@@ -29,7 +29,7 @@ export class StripeClient {
       const wallet = request.wallet ? `&wallet=${request.wallet}` : "";
       return {
         sessionId: `demo_${request.orderId}`,
-        url: `/salong-nord?payment=demo&order=${request.orderId}${wallet}`,
+        url: `/din-bedrift?payment=demo&order=${request.orderId}${wallet}`,
       };
     }
 

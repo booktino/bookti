@@ -18,7 +18,7 @@ export async function POST(request: Request) {
 
   const business = body.slug
     ? getBusinessBySlug(body.slug)
-    : getBusinessBySlug("salong-nord");
+    : getBusinessBySlug("din-bedrift");
 
   if (!business) {
     return NextResponse.json({ error: "Bedrift ikke funnet" }, { status: 404 });
@@ -92,7 +92,7 @@ export async function POST(request: Request) {
 
 export async function GET(request: Request) {
   const { searchParams } = new URL(request.url);
-  const slug = searchParams.get("slug") ?? "salong-nord";
+  const slug = searchParams.get("slug") ?? "din-bedrift";
   const business = getBusinessBySlug(slug);
 
   if (!business) {

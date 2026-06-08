@@ -15,7 +15,7 @@ export const PLANS: PlanDetails[] = [
     id: "starter",
     name: "Starter",
     priceNok: 299,
-    description: "Perfekt for enkeltpersonforetak og små salonger.",
+    description: "Perfekt for enkeltpersonforetak og små bedrifter.",
     features: [
       `${FREE_TRIAL_MONTHS} måneder gratis`,
       "Ubegrenset antall bookinger",

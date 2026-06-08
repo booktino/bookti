@@ -2,7 +2,6 @@
 
 import { useState } from "react";
 import Link from "next/link";
-import { useRouter } from "next/navigation";
 import { Logo } from "@/components/Logo";
 import { StepIndicator } from "@/components/StepIndicator";
 import type { Database } from "@/lib/database.types";
@@ -12,8 +11,19 @@ import { createClient } from "@/lib/supabase";
 
 const STEPS = [
   { id: 1, label: "Konto" },
-  { id: 2, label: "Salong" },
+  { id: 2, label: "Bedrift" },
 ];
+
+const BUSINESS_TYPES = [
+  "Frisør / Barber",
+  "Skjønnhetssalong",
+  "Massasje / Spa",
+  "Personlig trener",
+  "Fysioterapi / Naprapat",
+  "Tannlege",
+  "Tatovering / Piercing",
+  "Annet",
+] as const;
 
 function slugify(text: string): string {
   return text
@@ -34,8 +44,8 @@ function randomSuffix(length = 4): string {
   ).join("");
 }
 
-function buildSlug(salonName: string): string {
-  const base = slugify(salonName) || "salong";
+function buildSlug(businessName: string): string {
+  const base = slugify(businessName) || "bedrift";
   return `${base}-${randomSuffix(4)}`;
 }
 
@@ -46,12 +56,57 @@ function trialEndsAt(): string {
 }
 
 type SalonInsert = Database["public"]["Tables"]["salons"]["Insert"];
+type SupabaseClient = ReturnType<typeof createClient>;
+
+type SalonFormData = {
+  businessName: string;
+  email: string;
+  phone: string;
+  address: string;
+  city: string;
+};
+
+async function createSalon(
+  supabase: SupabaseClient,
+  ownerId: string,
+  form: SalonFormData
+): Promise<{ error: string | null }> {
+  const salon: SalonInsert = {
+    owner_id: ownerId,
+    name: form.businessName.trim(),
+    slug: buildSlug(form.businessName),
+    phone: form.phone.trim(),
+    address: form.address.trim(),
+    city: form.city.trim() || "Bergen",
+    email: form.email.trim(),
+    description: null,
+    logo_url: null,
+    cover_url: null,
+    stripe_customer_id: null,
+    stripe_subscription_id: null,
+    country: COUNTRY,
+    currency: CURRENCY,
+    timezone: TIMEZONE,
+    plan: "trial",
+    trial_ends_at: trialEndsAt(),
+    booking_notice_hours: 24,
+    cancellation_hours: 24,
+    is_active: true,
+  };
+
+  const { error } = await supabase.from("salons").insert(salon);
+
+  if (error) {
+    return { error: error.message };
+  }
+
+  return { error: null };
+}
 
 const inputClass =
   "min-h-12 w-full rounded-lg border border-[#C8E6D8] bg-white px-4 text-[#0D3B2E] outline-none transition-colors focus:border-[#0F6E56] focus:ring-2 focus:ring-[#0F6E56]/20";
 
 export default function RegisterPage() {
-  const router = useRouter();
   const [step, setStep] = useState(1);
   const [loading, setLoading] = useState(false);
   const [error, setError] = useState<string | null>(null);
@@ -60,7 +115,8 @@ export default function RegisterPage() {
   const [email, setEmail] = useState("");
   const [password, setPassword] = useState("");
 
-  const [salonName, setSalonName] = useState("");
+  const [businessName, setBusinessName] = useState("");
+  const [businessType, setBusinessType] = useState<string>(BUSINESS_TYPES[0]);
   const [phone, setPhone] = useState("");
   const [address, setAddress] = useState("");
   const [city, setCity] = useState("Bergen");
@@ -84,61 +140,76 @@ export default function RegisterPage() {
 
     const supabase = createClient();
 
+    console.log("[register] start");
+
     const { data: authData, error: signUpError } = await supabase.auth.signUp({
       email,
       password,
       options: {
-        data: { full_name: fullName },
+        data: { full_name: fullName, business_type: businessType },
       },
     });
 
+    console.log("[register] after signUp", {
+      error: signUpError?.message ?? null,
+      userId: authData.user?.id ?? null,
+    });
+
     if (signUpError) {
+      if (signUpError.message === "User already registered") {
+        setError("E-post allerede i bruk");
+      } else {
+        setError(signUpError.message);
+      }
       setLoading(false);
-      setError(signUpError.message);
       return;
     }
 
-    const userId = authData.user?.id;
-    if (!userId) {
-      setLoading(false);
+    if (!authData.user?.id) {
       setError("Kunne ikke opprette bruker. Prøv igjen.");
+      setLoading(false);
       return;
     }
 
-    const salon: SalonInsert = {
-      owner_id: userId,
-      name: salonName.trim(),
-      slug: buildSlug(salonName),
-      phone: phone.trim(),
-      address: address.trim(),
-      city: city.trim() || "Bergen",
-      email: email.trim(),
-      description: null,
-      logo_url: null,
-      cover_url: null,
-      stripe_customer_id: null,
-      stripe_subscription_id: null,
-      country: COUNTRY,
-      currency: CURRENCY,
-      timezone: TIMEZONE,
-      plan: "trial",
-      trial_ends_at: trialEndsAt(),
-      booking_notice_hours: 24,
-      cancellation_hours: 24,
-      is_active: true,
-    };
+    const { data: sessionData, error: signInError } =
+      await supabase.auth.signInWithPassword({
+        email,
+        password,
+      });
 
-    const { error: salonError } = await supabase.from("salons").insert(salon);
+    console.log("[register] after signInWithPassword", {
+      error: signInError?.message ?? null,
+      userId: sessionData.user?.id ?? null,
+    });
 
-    setLoading(false);
+    if (signInError) {
+      setError(`Innlogging etter registrering feilet: ${signInError.message}`);
+      setLoading(false);
+      return;
+    }
+
+    const userId = sessionData.user?.id ?? authData.user.id;
+
+    const { error: salonError } = await createSalon(supabase, userId, {
+      businessName,
+      email,
+      phone,
+      address,
+      city,
+    });
+
+    console.log("[register] after salon insert", {
+      error: salonError ?? null,
+    });
 
     if (salonError) {
-      setError(salonError.message);
+      setError(`Kunne ikke opprette bedrift: ${salonError}`);
+      setLoading(false);
       return;
     }
 
-    router.push("/dashboard");
-    router.refresh();
+    console.log("[register] redirecting to /dashboard");
+    window.location.href = "/dashboard";
   }
 
   return (
@@ -158,7 +229,7 @@ export default function RegisterPage() {
 
       <main className="relative z-10 flex flex-1 items-center justify-center px-4 py-12">
         <div className="w-full max-w-md rounded-2xl border border-[#C8E6D8] bg-white p-8 shadow-sm">
-          <h1 className="text-2xl font-bold tracking-tight">Opprett konto</h1>
+          <h1 className="text-2xl font-bold tracking-tight">Registrer bedriften din</h1>
           <p className="mt-2 text-sm text-[#4A6B5E]">
             Start med {FREE_TRIAL_MONTHS} måneder gratis
           </p>
@@ -244,20 +315,42 @@ export default function RegisterPage() {
             <form onSubmit={handleStep2} className="mt-8 space-y-5">
               <div>
                 <label
-                  htmlFor="salonName"
+                  htmlFor="businessName"
                   className="mb-1.5 block text-sm font-semibold"
                 >
-                  Navn på salong
+                  Navn på bedriften
                 </label>
                 <input
-                  id="salonName"
+                  id="businessName"
                   type="text"
                   required
-                  value={salonName}
-                  onChange={(e) => setSalonName(e.target.value)}
-                  placeholder="Salong Nord"
+                  value={businessName}
+                  onChange={(e) => setBusinessName(e.target.value)}
+                  placeholder="Frisør Nord AS"
                   className={inputClass}
                 />
+              </div>
+
+              <div>
+                <label
+                  htmlFor="businessType"
+                  className="mb-1.5 block text-sm font-semibold"
+                >
+                  Type virksomhet
+                </label>
+                <select
+                  id="businessType"
+                  required
+                  value={businessType}
+                  onChange={(e) => setBusinessType(e.target.value)}
+                  className={inputClass}
+                >
+                  {BUSINESS_TYPES.map((type) => (
+                    <option key={type} value={type}>
+                      {type}
+                    </option>
+                  ))}
+                </select>
               </div>
 
               <div>
@@ -340,7 +433,7 @@ export default function RegisterPage() {
                   disabled={loading}
                   className="min-h-12 flex-1 rounded-lg bg-[#0F6E56] text-sm font-bold text-white transition-colors hover:bg-[#0d5f4a] disabled:cursor-not-allowed disabled:opacity-60"
                 >
-                  {loading ? "Oppretter…" : "Opprett konto"}
+                  {loading ? "Oppretter…" : "Opprett bedrift"}
                 </button>
               </div>
             </form>

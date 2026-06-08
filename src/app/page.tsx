@@ -92,11 +92,11 @@ export default function ComingSoon() {
             Se hvordan det fungerer
           </p>
           <div className="bookti-actions" style={{ display:"flex",justifyContent:"center",gap:10,marginBottom:32,flexWrap:"wrap",width:"100%" }}>
-            <a href="/salong-nord" style={{ padding:"11px 22px",background:C.primary,border:`1px solid ${C.primary}`,borderRadius:10,color:"#fff",fontSize:13,fontWeight:700,textDecoration:"none" }}>
+            <a href="/din-bedrift" style={{ padding:"11px 22px",background:C.primary,border:`1px solid ${C.primary}`,borderRadius:10,color:"#fff",fontSize:13,fontWeight:700,textDecoration:"none" }}>
               Prøv bookingside →
             </a>
             <a href="/admin" style={{ padding:"11px 22px",background:C.surface,border:`1px solid ${C.border}`,borderRadius:10,color:C.muted,fontSize:13,fontWeight:700,textDecoration:"none" }}>
-              Adminpanel →
+              Bookti Dashboard →
             </a>
           </div>
 

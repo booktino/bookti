@@ -31,7 +31,7 @@ export const no = {
     clients: "Kunder",
     invoices: "Fakturaer",
     settings: "Innstillinger",
-    panelTitle: "Adminpanel",
+    panelTitle: "Bookti Dashboard",
     businessSettings: "Bedriftsinnstillinger",
     openingHours: "Åpningstider",
     notifications: "Varsler",
