@@ -13,10 +13,61 @@ type Salon = Pick<
   "id" | "name" | "slug" | "plan" | "trial_ends_at"
 >;
 
+type Booking = Database["public"]["Tables"]["bookings"]["Row"];
+
+type DashboardStats = {
+  appointmentsToday: number;
+  weeklyRevenue: number;
+  occupancy: string;
+  activeCustomers: number;
+};
+
 type DashboardState =
   | { status: "loading" }
   | { status: "no-salon" }
-  | { status: "ready"; salon: Salon };
+  | { status: "ready"; salon: Salon; stats: DashboardStats };
+
+function getWeekBounds() {
+  const now = new Date();
+  const day = now.getDay();
+  const monday = new Date(now);
+  monday.setDate(now.getDate() - ((day + 6) % 7));
+  monday.setHours(0, 0, 0, 0);
+  const sunday = new Date(monday);
+  sunday.setDate(monday.getDate() + 6);
+  sunday.setHours(23, 59, 59, 999);
+  return { monday, sunday };
+}
+
+function computeStats(bookings: Booking[]): DashboardStats {
+  const today = new Date().toISOString().split("T")[0];
+  const { monday, sunday } = getWeekBounds();
+
+  const appointmentsToday = bookings.filter(
+    (b) => b.starts_at.split("T")[0] === today,
+  ).length;
+
+  const weeklyRevenue = bookings
+    .filter((b) => {
+      const start = new Date(b.starts_at);
+      return start >= monday && start <= sunday && b.status !== "cancelled";
+    })
+    .reduce((sum, b) => sum + (b.price_nok ?? 0), 0);
+
+  const occupancy = `${Math.round((bookings.length / 40) * 100)}%`;
+  const activeCustomers = new Set(bookings.map((b) => b.client_phone)).size;
+
+  return { appointmentsToday, weeklyRevenue, occupancy, activeCustomers };
+}
+
+function formatPriceNok(kroner: number): string {
+  return new Intl.NumberFormat("nb-NO", {
+    style: "currency",
+    currency: "NOK",
+    minimumFractionDigits: 0,
+    maximumFractionDigits: 0,
+  }).format(kroner);
+}
 
 export default function DashboardPage() {
   const router = useRouter();
@@ -59,7 +110,15 @@ export default function DashboardPage() {
         return;
       }
 
-      setState({ status: "ready", salon });
+      const { data: bookings } = await supabase
+        .from("bookings")
+        .select("*")
+        .eq("salon_id", salon.id);
+
+      if (cancelled) return;
+
+      const stats = computeStats(bookings ?? []);
+      setState({ status: "ready", salon, stats });
     }
 
     loadDashboard();
@@ -133,7 +192,7 @@ export default function DashboardPage() {
     );
   }
 
-  const { salon } = state;
+  const { salon, stats } = state;
   const trialDaysLeft =
     salon.plan === "trial" ? getTrialDaysLeft(salon.trial_ends_at) : 0;
 
@@ -184,10 +243,19 @@ export default function DashboardPage() {
 
           <div className="mt-8 grid gap-3 sm:grid-cols-2">
             {[
-              { label: no.dashboard.appointmentsToday, val: "—" },
-              { label: no.dashboard.weeklyRevenue, val: "—" },
-              { label: no.dashboard.occupancy, val: "—" },
-              { label: no.dashboard.activeCustomers, val: "—" },
+              {
+                label: no.dashboard.appointmentsToday,
+                val: String(stats.appointmentsToday),
+              },
+              {
+                label: no.dashboard.weeklyRevenue,
+                val: formatPriceNok(stats.weeklyRevenue),
+              },
+              { label: no.dashboard.occupancy, val: stats.occupancy },
+              {
+                label: no.dashboard.activeCustomers,
+                val: String(stats.activeCustomers),
+              },
             ].map(({ label, val }) => (
               <div
                 key={label}
