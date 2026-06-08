@@ -1,139 +1,103 @@
 import { NextResponse } from "next/server";
-import { createClient } from "@supabase/supabase-js";
+import { createBooking } from "@/lib/booking/create";
 import {
-  buildRefundSmsSuffix,
-  calculateRefundStatus,
-  canCancelOnline,
-  formatBookingDate,
-  formatBookingTime,
-  type SalonCancellationPolicy,
-} from "@/lib/cancellation";
-import { sendTwilioSms } from "@/lib/notifications/twilio";
+  addBooking,
+  getBookings,
+  getBusinessBySlug,
+  getService,
+} from "@/lib/data/demo";
+import { buildReminderJobs, sendPush, sendSms } from "@/lib/notifications/reminders";
+import { initiateStripePayment } from "@/lib/stripe/client";
+import { vipps } from "@/lib/vipps/client";
+import type { CreateBookingInput, PaymentMethod } from "@/lib/types/booking";
 
-type CancelBookingBody = {
-  booking_id?: string;
-  reason?: string;
-};
-
-function getServiceSupabase() {
-  const supabaseUrl = process.env.NEXT_PUBLIC_SUPABASE_URL;
-  const supabaseKey =
-    process.env.SUPABASE_SERVICE_ROLE_KEY ?? process.env.NEXT_PUBLIC_SUPABASE_ANON_KEY;
-
-  if (!supabaseUrl || !supabaseKey) return null;
-  return createClient(supabaseUrl, supabaseKey);
-}
+const STRIPE_PAYMENT: PaymentMethod[] = ["apple_pay", "google_pay", "stripe"];
 
 export async function POST(request: Request) {
-  const body = (await request.json()) as CancelBookingBody;
-  const { booking_id, reason } = body;
+  const body = (await request.json()) as CreateBookingInput & { slug?: string };
 
-  if (!booking_id) {
-    return NextResponse.json({ error: "Mangler booking_id" }, { status: 400 });
+  const business = body.slug
+    ? getBusinessBySlug(body.slug)
+    : getBusinessBySlug("din-bedrift");
+
+  if (!business) {
+    return NextResponse.json({ error: "Bedrift ikke funnet" }, { status: 404 });
   }
 
-  const supabase = getServiceSupabase();
-  if (!supabase) {
-    return NextResponse.json({ error: "Database ikke konfigurert" }, { status: 500 });
+  const service = getService(body.serviceId);
+  if (!service || service.businessId !== business.id) {
+    return NextResponse.json({ error: "Tjeneste ikke funnet" }, { status: 404 });
   }
 
-  const { data: booking, error: bookingError } = await supabase
-    .from("bookings")
-    .select(
-      "*, salons(name, phone, cancellation_allowed, cancellation_hours, cancellation_reason_required, cancellation_fee_enabled, cancellation_refund_hours, cancellation_fee_type, cancellation_fee_amount)",
-    )
-    .eq("id", booking_id)
-    .single();
+  const existing = getBookings(business.id);
+  const result = createBooking(
+    { ...body, businessId: business.id },
+    service,
+    existing,
+  );
 
-  if (bookingError || !booking) {
-    return NextResponse.json({ error: "Time ikke funnet" }, { status: 404 });
+  if ("error" in result) {
+    return NextResponse.json({ error: result.error }, { status: 409 });
   }
 
-  const salon = booking.salons as {
-    name: string;
-    phone: string | null;
-    cancellation_allowed: boolean;
-    cancellation_hours: number;
-    cancellation_reason_required: boolean;
-    cancellation_fee_enabled: boolean;
-    cancellation_refund_hours: number;
-    cancellation_fee_type: SalonCancellationPolicy["cancellation_fee_type"];
-    cancellation_fee_amount: number | null;
-  } | null;
+  addBooking(result);
 
-  if (!salon) {
-    return NextResponse.json({ error: "Salong ikke funnet" }, { status: 404 });
+  const reminders = buildReminderJobs(
+    result.id,
+    result.customerName,
+    result.customerPhone,
+    business.name,
+    result.startsAt,
+    "owner-demo-token",
+  );
+
+  for (const job of reminders) {
+    if (job.channel === "sms") await sendSms(job.recipient, job.message);
+    if (job.channel === "push") await sendPush(job.recipient, job.message);
   }
 
-  if (booking.status === "cancelled") {
-    return NextResponse.json({ error: "already_cancelled" }, { status: 409 });
-  }
+  const baseUrl = process.env.NEXT_PUBLIC_APP_URL ?? "";
+  let paymentUrl: string | undefined;
 
-  const policy: SalonCancellationPolicy = {
-    cancellation_allowed: salon.cancellation_allowed,
-    cancellation_hours: salon.cancellation_hours,
-    cancellation_fee_enabled: salon.cancellation_fee_enabled,
-    cancellation_refund_hours: salon.cancellation_refund_hours,
-    cancellation_fee_type: salon.cancellation_fee_type,
-    cancellation_fee_amount: salon.cancellation_fee_amount,
-  };
-
-  if (!salon.cancellation_allowed) {
-    return NextResponse.json({ error: "cancellation_not_allowed" }, { status: 403 });
-  }
-
-  if (!canCancelOnline(policy, booking.starts_at)) {
-    return NextResponse.json({ error: "deadline_passed" }, { status: 403 });
-  }
-
-  if (salon.cancellation_reason_required && !reason?.trim()) {
-    return NextResponse.json({ error: "reason_required" }, { status: 400 });
-  }
-
-  const refundStatus = calculateRefundStatus(policy, booking.starts_at);
-
-  const { error: updateError } = await supabase
-    .from("bookings")
-    .update({
-      status: "cancelled",
-      cancellation_reason: reason?.trim() || null,
-      refund_status: refundStatus,
-    })
-    .eq("id", booking_id);
-
-  if (updateError) {
-    return NextResponse.json({ error: "Kunne ikke avbestille" }, { status: 500 });
-  }
-
-  const dateStr = formatBookingDate(booking.starts_at);
-  const timeStr = formatBookingTime(booking.starts_at);
-  const clientPhone = booking.client_phone.startsWith("+")
-    ? booking.client_phone
-    : `+47${booking.client_phone.replace(/\D/g, "")}`;
-
-  const refundSuffix = buildRefundSmsSuffix(refundStatus);
-
-  await sendTwilioSms({
-    to: clientPhone,
-    message: `Din time hos ${salon.name} ${dateStr} kl. ${timeStr} er avbestilt.${refundSuffix}`,
-    bookingId: booking_id,
-    salonId: booking.salon_id,
-    type: "cancellation",
-  });
-
-  if (salon.phone) {
-    const ownerPhone = salon.phone.startsWith("+")
-      ? salon.phone
-      : `+47${salon.phone.replace(/\D/g, "")}`;
-
-    await sendTwilioSms({
-      to: ownerPhone,
-      message: `Avbestilling: ${booking.client_name} har avbestilt timen ${dateStr} kl. ${timeStr} (refusjon: ${refundStatus}).`,
-      bookingId: booking_id,
-      salonId: booking.salon_id,
-      type: "cancellation",
+  if (result.paymentMethod === "vipps") {
+    const payment = await vipps.initiatePayment({
+      amountOre: service.priceOre,
+      orderId: result.id,
+      description: `${service.name} — ${business.name}`,
+      customerPhone: result.customerPhone,
+      callbackUrl: `${baseUrl}/api/vipps/callback`,
+      fallbackUrl: `${baseUrl}/${business.slug}`,
     });
+    paymentUrl = payment.url;
+  } else if (STRIPE_PAYMENT.includes(result.paymentMethod)) {
+    const stripePayment = await initiateStripePayment(result.paymentMethod, {
+      amountOre: service.priceOre,
+      orderId: result.id,
+      description: `${service.name} — ${business.name}`,
+      customerEmail: result.customerEmail,
+      successUrl: `${baseUrl}/${business.slug}?success=1`,
+      cancelUrl: `${baseUrl}/${business.slug}`,
+      wallet:
+        result.paymentMethod === "apple_pay"
+          ? "apple_pay"
+          : result.paymentMethod === "google_pay"
+            ? "google_pay"
+            : undefined,
+    });
+    paymentUrl = stripePayment?.url;
   }
 
-  return NextResponse.json({ success: true, refund_status: refundStatus });
+  return NextResponse.json({ booking: result, paymentUrl }, { status: 201 });
+}
+
+export async function GET(request: Request) {
+  const { searchParams } = new URL(request.url);
+  const slug = searchParams.get("slug") ?? "din-bedrift";
+  const business = getBusinessBySlug(slug);
+
+  if (!business) {
+    return NextResponse.json({ error: "Bedrift ikke funnet" }, { status: 404 });
+  }
+
+  return NextResponse.json({ bookings: getBookings(business.id) });
 }
