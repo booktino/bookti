@@ -142,16 +142,14 @@ export default function SalonPage() {
     const [servicesRes, staffRes] = await Promise.all([
       supabase
         .from("services")
-        .select("*")
+        .select("id, name, description, duration_min, price_nok, is_active")
         .eq("salon_id", salonData.id)
-        .eq("is_active", true)
-        .order("display_order"),
+        .eq("is_active", true),
       supabase
         .from("staff")
-        .select("*")
+        .select("id, name, title, avatar_url, is_active")
         .eq("salon_id", salonData.id)
-        .eq("is_active", true)
-        .order("display_order"),
+        .eq("is_active", true),
     ]);
 
     setSalon(salonData);
