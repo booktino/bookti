@@ -3,9 +3,38 @@
 import { useParams } from "next/navigation";
 import { useCallback, useEffect, useMemo, useState } from "react";
 import { StepIndicator } from "@/components/StepIndicator";
+import { StripeWalletButton } from "@/components/StripeWalletButton";
 import { no } from "@/i18n/no";
 import type { Database } from "@/lib/database.types";
 import { createClient } from "@/lib/supabase";
+
+type VisitPaymentMethod = "card" | "wallet" | "cash";
+
+const PAYMENT_METHODS: {
+  id: VisitPaymentMethod;
+  label: string;
+  description: string;
+  icon: string;
+}[] = [
+  {
+    id: "card",
+    label: "Kort",
+    description: "Visa / Mastercard via Stripe",
+    icon: "💳",
+  },
+  {
+    id: "wallet",
+    label: "Apple Pay / Google Pay",
+    description: "Rask betaling via Stripe",
+    icon: "",
+  },
+  {
+    id: "cash",
+    label: "Betal i salongen",
+    description: "Kontant eller kort på stedet",
+    icon: "💵",
+  },
+];
 
 type Salon = Database["public"]["Tables"]["salons"]["Row"];
 type Service = Database["public"]["Tables"]["services"]["Row"];
@@ -116,9 +145,11 @@ export default function SalonPage() {
   const [clientPhone, setClientPhone] = useState("");
   const [clientEmail, setClientEmail] = useState("");
   const [clientNotes, setClientNotes] = useState("");
+  const [paymentMethod, setPaymentMethod] = useState<VisitPaymentMethod>("cash");
   const [submitting, setSubmitting] = useState(false);
   const [submitError, setSubmitError] = useState(false);
   const [confirmed, setConfirmed] = useState<ConfirmedBooking | null>(null);
+  const [paymentReturn, setPaymentReturn] = useState<"success" | "cancelled" | null>(null);
 
   const fetchSalonData = useCallback(async () => {
     if (!slug) return;
@@ -165,6 +196,16 @@ export default function SalonPage() {
     fetchSalonData();
   }, [fetchSalonData]);
 
+  useEffect(() => {
+    const params = new URLSearchParams(window.location.search);
+    const bookingStatus = params.get("booking");
+    if (bookingStatus === "success") {
+      setPaymentReturn("success");
+    } else if (bookingStatus === "cancelled") {
+      setPaymentReturn("cancelled");
+    }
+  }, []);
+
   const selectedService = services.find((s) => s.id === selectedServiceId) ?? null;
   const selectedStaff = staffList.find((s) => s.id === selectedStaffId) ?? null;
   const phoneValid = clientPhone.replace(/\D/g, "").length === 8;
@@ -176,11 +217,20 @@ export default function SalonPage() {
     year: "numeric",
   }).format(calendarMonth);
 
-  async function handleConfirm() {
-    if (!salon || !selectedService || !selectedDateKey || !selectedTime || !detailsValid) return;
+  function buildConfirmedBooking(): ConfirmedBooking | null {
+    if (!selectedService || !selectedDateKey || !selectedTime) return null;
+    return {
+      serviceName: selectedService.name,
+      staffName: selectedStaff?.name ?? null,
+      startsAt: buildDateTime(selectedDateKey, selectedTime),
+      clientName: clientName.trim(),
+      clientPhone: `+47 ${clientPhone.replace(/\D/g, "")}`,
+      priceNok: selectedService.price_nok,
+    };
+  }
 
-    setSubmitting(true);
-    setSubmitError(false);
+  async function createBookingRecord(): Promise<{ id: string } | null> {
+    if (!salon || !selectedService || !selectedDateKey || !selectedTime) return null;
 
     const startsAt = buildDateTime(selectedDateKey, selectedTime);
     const endsAt = new Date(startsAt.getTime() + selectedService.duration_min * 60_000);
@@ -205,13 +255,14 @@ export default function SalonPage() {
       .select("id")
       .single();
 
-    setSubmitting(false);
+    if (error || !booking) return null;
+    return booking;
+  }
 
-    if (error || !booking) {
-      setSubmitError(true);
-      return;
-    }
+  function sendConfirmationSms(bookingId: string) {
+    if (!salon || !selectedDateKey || !selectedTime) return;
 
+    const startsAt = buildDateTime(selectedDateKey, selectedTime);
     const dateStr = formatDateLong(startsAt);
     const timeStr = new Intl.DateTimeFormat("nb-NO", {
       hour: "2-digit",
@@ -225,19 +276,85 @@ export default function SalonPage() {
       body: JSON.stringify({
         to: `+47${clientPhone.replace(/\D/g, "")}`,
         message: smsMessage,
-        booking_id: booking.id,
+        booking_id: bookingId,
         salon_id: salon.id,
       }),
     });
+  }
 
-    setConfirmed({
-      serviceName: selectedService.name,
-      staffName: selectedStaff?.name ?? null,
-      startsAt,
-      clientName: clientName.trim(),
-      clientPhone: `+47 ${clientPhone.replace(/\D/g, "")}`,
-      priceNok: selectedService.price_nok,
-    });
+  const prepareWalletBooking = async (): Promise<string | null> => {
+    if (!detailsValid) return null;
+    setSubmitting(true);
+    setSubmitError(false);
+
+    const booking = await createBookingRecord();
+    setSubmitting(false);
+
+    if (!booking) {
+      setSubmitError(true);
+      return null;
+    }
+
+    sendConfirmationSms(booking.id);
+    return booking.id;
+  };
+
+  const handleWalletSuccess = () => {
+    const booking = buildConfirmedBooking();
+    if (booking) setConfirmed(booking);
+  };
+
+  async function handleConfirm() {
+    if (!salon || !selectedService || !selectedDateKey || !selectedTime || !detailsValid) return;
+    if (paymentMethod === "wallet") return;
+
+    setSubmitting(true);
+    setSubmitError(false);
+
+    const booking = await createBookingRecord();
+    if (!booking) {
+      setSubmitting(false);
+      setSubmitError(true);
+      return;
+    }
+
+    if (paymentMethod === "card") {
+      try {
+        const res = await fetch("/api/stripe/checkout", {
+          method: "POST",
+          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify({
+            amount: selectedService.price_nok,
+            currency: "nok",
+            salon_id: salon.id,
+            booking_id: booking.id,
+            service_name: selectedService.name,
+            slug,
+          }),
+        });
+
+        const data = (await res.json()) as { url?: string };
+        if (!res.ok || !data.url) {
+          setSubmitting(false);
+          setSubmitError(true);
+          return;
+        }
+
+        sendConfirmationSms(booking.id);
+        window.location.href = data.url;
+        return;
+      } catch {
+        setSubmitting(false);
+        setSubmitError(true);
+        return;
+      }
+    }
+
+    setSubmitting(false);
+    sendConfirmationSms(booking.id);
+
+    const confirmedBooking = buildConfirmedBooking();
+    if (confirmedBooking) setConfirmed(confirmedBooking);
   }
 
   if (loading) {
@@ -252,6 +369,48 @@ export default function SalonPage() {
     return (
       <main className="flex min-h-[100dvh] items-center justify-center bg-[#EFF8F4] px-4 font-sans text-[#0D3B2E]">
         <p>{no.booking.salonNotFound}</p>
+      </main>
+    );
+  }
+
+  if (paymentReturn === "success") {
+    return (
+      <main className="flex min-h-[100dvh] flex-col items-center justify-center bg-[#EFF8F4] px-4 pb-[env(safe-area-inset-bottom)] font-sans text-[#0D3B2E]">
+        <div className="w-full max-w-sm rounded-2xl border border-[#C8E6D8] bg-white p-8 text-center shadow-sm sm:p-10">
+          <div className="mx-auto flex h-14 w-14 items-center justify-center rounded-full bg-[#5DCAA5]/20 text-3xl text-[#0F6E56]">
+            ✓
+          </div>
+          <h1 className="mt-4 text-xl font-bold">{no.booking.bookingConfirmed}</h1>
+          <p className="mt-2 text-sm text-[#4A6B5E]">
+            Betalingen er fullført. {no.booking.smsConfirmation}
+          </p>
+        </div>
+        <p className="mt-6 text-center text-[10px] text-[#7A9A8E]">Powered by Bookti</p>
+      </main>
+    );
+  }
+
+  if (paymentReturn === "cancelled") {
+    return (
+      <main className="flex min-h-[100dvh] flex-col items-center justify-center bg-[#EFF8F4] px-4 pb-[env(safe-area-inset-bottom)] font-sans text-[#0D3B2E]">
+        <div className="w-full max-w-sm rounded-2xl border border-[#C8E6D8] bg-white p-8 text-center shadow-sm sm:p-10">
+          <h1 className="text-xl font-bold">Betaling avbrutt</h1>
+          <p className="mt-2 text-sm text-[#4A6B5E]">
+            Betalingen ble avbrutt. Timen din kan fortsatt være reservert — ta kontakt med salongen
+            ved spørsmål.
+          </p>
+          <button
+            type="button"
+            onClick={() => {
+              window.history.replaceState({}, "", `/${slug}`);
+              setPaymentReturn(null);
+            }}
+            className={`${btnPrimary} mt-6`}
+          >
+            Prøv igjen
+          </button>
+        </div>
+        <p className="mt-6 text-center text-[10px] text-[#7A9A8E]">Powered by Bookti</p>
       </main>
     );
   }
@@ -586,6 +745,38 @@ export default function SalonPage() {
                     className="w-full resize-none rounded-xl border border-[#C8E6D8] bg-[#EFF8F4] px-4 py-3 text-base outline-none focus:border-[#0F6E56]"
                   />
                 </div>
+
+                <div>
+                  <label className="mb-2 block text-xs font-semibold text-[#4A6B5E]">
+                    Betalingsmetode
+                  </label>
+                  <div className="space-y-2">
+                    {PAYMENT_METHODS.map((method) => (
+                      <button
+                        key={method.id}
+                        type="button"
+                        onClick={() => setPaymentMethod(method.id)}
+                        className={`flex min-h-14 w-full items-center gap-3 rounded-xl border px-4 py-3 text-left transition-transform active:scale-[0.99] ${
+                          paymentMethod === method.id
+                            ? "border-[#0F6E56] bg-[#0F6E56]/5"
+                            : "border-[#C8E6D8]"
+                        }`}
+                      >
+                        {method.icon ? (
+                          <span className="text-xl">{method.icon}</span>
+                        ) : (
+                          <span className="flex h-8 w-8 items-center justify-center rounded-lg bg-black text-[10px] font-bold text-white">
+                            Pay
+                          </span>
+                        )}
+                        <div>
+                          <div className="text-sm font-semibold">{method.label}</div>
+                          <div className="text-xs text-[#7A9A8E]">{method.description}</div>
+                        </div>
+                      </button>
+                    ))}
+                  </div>
+                </div>
               </div>
 
               <div className="mt-6 space-y-3 rounded-xl bg-[#EFF8F4] p-4 text-sm">
@@ -662,13 +853,30 @@ export default function SalonPage() {
           )}
 
           {step === 4 && (
-            <button
-              onClick={handleConfirm}
-              disabled={!detailsValid || submitting}
-              className={`${btnPrimary} disabled:opacity-40`}
-            >
-              {submitting ? no.common.loading : no.booking.confirmBooking}
-            </button>
+            paymentMethod === "wallet" ? (
+              <StripeWalletButton
+                amount={selectedService?.price_nok ?? 0}
+                serviceName={selectedService?.name ?? "Time"}
+                salonId={salon.id}
+                slug={slug}
+                disabled={!detailsValid || submitting}
+                onPrepareBooking={prepareWalletBooking}
+                onSuccess={handleWalletSuccess}
+                onError={() => setSubmitError(true)}
+              />
+            ) : (
+              <button
+                onClick={handleConfirm}
+                disabled={!detailsValid || submitting}
+                className={`${btnPrimary} disabled:opacity-40`}
+              >
+                {submitting
+                  ? no.common.loading
+                  : paymentMethod === "card"
+                    ? "Betal med kort"
+                    : no.booking.confirmBooking}
+              </button>
+            )
           )}
         </div>
       </div>

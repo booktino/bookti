@@ -21,6 +21,8 @@ type DashboardState =
 export default function DashboardPage() {
   const router = useRouter();
   const [state, setState] = useState<DashboardState>({ status: "loading" });
+  const [upgrading, setUpgrading] = useState(false);
+  const [upgradeError, setUpgradeError] = useState(false);
 
   useEffect(() => {
     let cancelled = false;
@@ -67,6 +69,37 @@ export default function DashboardPage() {
     };
   }, [router]);
 
+  async function handleUpgrade(salonId: string) {
+    setUpgrading(true);
+    setUpgradeError(false);
+
+    try {
+      const res = await fetch("/api/stripe/subscription", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ salon_id: salonId }),
+      });
+
+      const data = (await res.json()) as { url?: string };
+      if (!res.ok || !data.url) {
+        setUpgradeError(true);
+        setUpgrading(false);
+        return;
+      }
+
+      window.location.href = data.url;
+    } catch {
+      setUpgradeError(true);
+      setUpgrading(false);
+    }
+  }
+
+  function getTrialDaysLeft(trialEndsAt: string): number {
+    const end = new Date(trialEndsAt);
+    const now = new Date();
+    return Math.max(0, Math.ceil((end.getTime() - now.getTime()) / (1000 * 60 * 60 * 24)));
+  }
+
   if (state.status === "loading") {
     return (
       <div className="flex min-h-screen flex-col items-center justify-center bg-[#EFF8F4] font-sans text-[#0D3B2E]">
@@ -101,6 +134,8 @@ export default function DashboardPage() {
   }
 
   const { salon } = state;
+  const trialDaysLeft =
+    salon.plan === "trial" ? getTrialDaysLeft(salon.trial_ends_at) : 0;
 
   return (
     <div className="flex min-h-screen flex-col bg-[#EFF8F4] font-sans text-[#0D3B2E]">
@@ -116,6 +151,30 @@ export default function DashboardPage() {
 
       <main className="flex-1 px-4 py-10">
         <div className="mx-auto max-w-3xl">
+          {salon.plan === "trial" && (
+            <div className="mb-6 rounded-xl border border-[#C8E6D8] bg-white p-4 shadow-sm sm:flex sm:items-center sm:justify-between sm:gap-4">
+              <p className="text-sm text-[#4A6B5E]">
+                Du har{" "}
+                <span className="font-bold text-[#0F6E56]">{trialDaysLeft}</span>{" "}
+                {trialDaysLeft === 1 ? "dag" : "dager"} igjen av prøveperioden. Oppgrader til
+                Pro for 299 kr/mnd
+              </p>
+              <button
+                type="button"
+                onClick={() => handleUpgrade(salon.id)}
+                disabled={upgrading}
+                className="mt-3 inline-flex min-h-11 shrink-0 items-center justify-center rounded-lg bg-[#0F6E56] px-5 text-sm font-bold text-white transition-colors hover:bg-[#0d5f4a] disabled:opacity-50 sm:mt-0"
+              >
+                {upgrading ? "Laster…" : "Oppgrader nå"}
+              </button>
+              {upgradeError && (
+                <p className="mt-2 w-full text-sm text-red-600 sm:mt-0 sm:basis-full">
+                  Kunne ikke starte oppgradering. Prøv igjen.
+                </p>
+              )}
+            </div>
+          )}
+
           <h1 className="text-2xl font-bold tracking-tight text-[#0F6E56]">
             {salon.name}
           </h1>
