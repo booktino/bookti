@@ -21,17 +21,12 @@ type Salon = Pick<
   | "name"
   | "cancellation_allowed"
   | "cancellation_hours"
-  | "cancellation_reason_required"
-  | "cancellation_fee_enabled"
-  | "cancellation_refund_hours"
   | "cancellation_fee_type"
   | "cancellation_fee_amount"
 >;
-type Service = Pick<Database["public"]["Tables"]["services"]["Row"], "name">;
 
 type BookingWithRelations = Booking & {
   salons: Salon | null;
-  services: Service | null;
 };
 
 type PageState =
@@ -48,7 +43,10 @@ const inputClass =
   "mt-1 w-full rounded-lg border border-[#C8E6D8] bg-white px-3 py-2 text-sm outline-none focus:border-[#0F6E56] focus:ring-2 focus:ring-[#0F6E56]/20";
 
 export default function CancelBookingPage() {
-  const { booking_id: bookingId } = useParams<{ booking_id: string }>();
+  const params = useParams();
+  const bookingId = Array.isArray(params.booking_id)
+    ? params.booking_id[0]
+    : params.booking_id;
   const supabase = useMemo(() => createClient(), []);
 
   const [pageState, setPageState] = useState<PageState>("loading");
@@ -67,12 +65,13 @@ export default function CancelBookingPage() {
       const { data, error: fetchError } = await supabase
         .from("bookings")
         .select(
-          "*, salons(name, cancellation_allowed, cancellation_hours, cancellation_reason_required, cancellation_fee_enabled, cancellation_refund_hours, cancellation_fee_type, cancellation_fee_amount), services(name)",
+          "*, salons(name, cancellation_hours, cancellation_allowed, cancellation_fee_type, cancellation_fee_amount)",
         )
         .eq("id", bookingId)
-        .maybeSingle();
+        .single();
 
-      if (fetchError || !data) {
+      if (fetchError) {
+        console.log(fetchError);
         setPageState("not_found");
         return;
       }
@@ -94,8 +93,8 @@ export default function CancelBookingPage() {
       const policy = {
         cancellation_allowed: salon.cancellation_allowed,
         cancellation_hours: salon.cancellation_hours,
-        cancellation_fee_enabled: salon.cancellation_fee_enabled,
-        cancellation_refund_hours: salon.cancellation_refund_hours,
+        cancellation_fee_enabled: salon.cancellation_fee_type != null,
+        cancellation_refund_hours: salon.cancellation_hours,
         cancellation_fee_type: salon.cancellation_fee_type,
         cancellation_fee_amount: salon.cancellation_fee_amount,
       };
@@ -107,7 +106,7 @@ export default function CancelBookingPage() {
 
       const refundHours = getRefundDeadlineHours(policy);
       if (
-        salon.cancellation_fee_enabled &&
+        policy.cancellation_fee_enabled &&
         salon.cancellation_fee_type &&
         !isBeforeRefundDeadline(row.starts_at, refundHours)
       ) {
@@ -123,11 +122,6 @@ export default function CancelBookingPage() {
 
   async function handleCancel() {
     if (!booking || !bookingId) return;
-
-    if (booking.salons?.cancellation_reason_required && !reason.trim()) {
-      setError("Vennligst oppgi en begrunnelse for avbestillingen.");
-      return;
-    }
 
     setCancelling(true);
     setError(null);
@@ -276,12 +270,6 @@ export default function CancelBookingPage() {
                   <span className="text-xs font-bold text-[#7A9A8E]">Salong</span>
                   <p className="font-semibold">{salon.name ?? "—"}</p>
                 </div>
-                {booking.services?.name && (
-                  <div>
-                    <span className="text-xs font-bold text-[#7A9A8E]">Tjeneste</span>
-                    <p className="font-semibold">{booking.services.name}</p>
-                  </div>
-                )}
                 <div>
                   <span className="text-xs font-bold text-[#7A9A8E]">Dato og tid</span>
                   <p className="font-semibold">
@@ -295,20 +283,18 @@ export default function CancelBookingPage() {
                 </div>
               </div>
 
-              {salon.cancellation_reason_required && (
-                <div className="mt-4">
-                  <label className="text-xs font-bold text-[#7A9A8E]">
-                    Begrunnelse for avbestilling
-                  </label>
-                  <textarea
-                    value={reason}
-                    onChange={(e) => setReason(e.target.value)}
-                    rows={3}
-                    placeholder="Fortell oss hvorfor du avbestiller…"
-                    className={inputClass}
-                  />
-                </div>
-              )}
+              <div className="mt-4">
+                <label className="text-xs font-bold text-[#7A9A8E]">
+                  Begrunnelse for avbestilling (valgfritt)
+                </label>
+                <textarea
+                  value={reason}
+                  onChange={(e) => setReason(e.target.value)}
+                  rows={3}
+                  placeholder="Fortell oss hvorfor du avbestiller…"
+                  className={inputClass}
+                />
+              </div>
 
               {error && <p className="mt-3 text-sm text-red-600">{error}</p>}
 
