@@ -20,6 +20,8 @@ export const no = {
     bookingConfirmed: "Booking bekreftet!",
     slotUnavailable: "Denne tiden er ikke lenger ledig",
     payWithVipps: "Betal med Vipps",
+    selectPayment: "Velg betalingsmetode",
+    payOnSite: "Betal på stedet etter timen",
     smsConfirmation: "Du får SMS-bekreftelse øyeblikkelig",
     next: "Neste",
     summary: "Oppsummering",

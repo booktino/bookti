@@ -10,6 +10,7 @@ import {
   demoServices,
 } from "@/lib/data/demo";
 import { formatNok } from "@/lib/norway/mva";
+import { PAYMENT_OPTIONS } from "@/lib/payments/methods";
 import { FREE_TRIAL_MONTHS } from "@/lib/pricing/plans";
 import type { Booking } from "@/lib/types/booking";
 
@@ -235,14 +236,19 @@ export default function AdminPage() {
               </section>
 
               <section className="rounded-xl border border-[#C8E6D8] bg-white p-5 shadow-sm">
-                <h3 className="mb-4 text-sm font-bold">{no.admin.vippsIntegration}</h3>
-                <div className="flex items-center gap-3 rounded-lg bg-[#EFF8F4] px-4 py-3">
-                  <span className="text-2xl">💚</span>
-                  <div>
-                    <div className="text-sm font-bold text-[#0F6E56]">Vipps tilkoblet</div>
-                    <div className="text-xs text-[#7A9A8E]">MSN: {demoBusiness.vippsMerchantId}</div>
-                  </div>
+                <h3 className="mb-4 text-sm font-bold">Betalingsmetoder</h3>
+                <div className="space-y-2">
+                  {PAYMENT_OPTIONS.map((opt) => (
+                    <label key={opt.id} className="flex items-center gap-3 rounded-lg border border-[#C8E6D8] px-4 py-3 text-sm">
+                      <input type="checkbox" defaultChecked className="accent-[#0F6E56]" />
+                      <span className="font-semibold">{opt.label}</span>
+                      <span className="text-xs text-[#7A9A8E]">{opt.description}</span>
+                    </label>
+                  ))}
                 </div>
+                <p className="mt-3 text-xs text-[#7A9A8E]">
+                  Vipps MSN: {demoBusiness.vippsMerchantId} · Stripe: demo-modus
+                </p>
               </section>
 
               <section className="rounded-xl border border-[#C8E6D8] bg-white p-5 shadow-sm">

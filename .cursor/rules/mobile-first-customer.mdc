@@ -1,0 +1,24 @@
+---
+description: Mobile-first UX for customer-facing Bookti flows
+globs: src/app/[slug]/**,src/app/book/**,src/components/StepIndicator.tsx
+alwaysApply: false
+---
+
+# Mobile-first — strona klienta
+
+Bookti budujemy **mobile-first** dla klientów końcowych (booking, płatność Vipps, SMS).
+
+## Zasady
+
+- Projektuj od **320px** w górę; desktop to rozszerzenie, nie odwrotnie
+- Przyciski i pola dotykowe: min. **48px** wysokości (`min-h-12`)
+- Główne CTA (Neste, Vipps) — widoczne bez scrolla; rozważ **sticky bottom bar**
+- `input type="tel"` + `inputMode="numeric"` dla numeru norweskiego
+- `pb-[env(safe-area-inset-bottom)]` — bezpieczny obszar na iPhone
+- Jedna kolumna, bez side-by-side na mobile
+- Kroki bookingu: proste, mało tekstu, duże strefy kliknięcia
+
+## Admin vs klient
+
+- `/admin` — może być szerszy layout (desktop-first OK)
+- `/[slug]` — **zawsze** mobile-first
