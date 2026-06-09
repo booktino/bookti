@@ -197,6 +197,18 @@ export default function CancelBookingPage() {
       }
 
       setCancelledRefundStatus(data.refund_status ?? null);
+
+      // Powiadom pierwszą osobę z waitlisty
+      try {
+        await fetch('/api/waitlist/notify', {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({ booking_id: bookingId }),
+        })
+      } catch (e) {
+        console.error('Waitlist notify failed:', e)
+      }
+
       setPageState("success");
     } catch {
       setError("Noe gikk galt. Prøv igjen.");

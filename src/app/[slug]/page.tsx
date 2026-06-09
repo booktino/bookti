@@ -24,7 +24,7 @@ import {
 } from "@/lib/cancellation";
 import type { Database } from "@/lib/database.types";
 import { createClient } from "@/lib/supabase";
-
+import WaitlistModal from "@/components/WaitlistModal";
 type VisitPaymentMethod = "card" | "wallet" | "cash";
 
 const PAYMENT_METHODS: {
@@ -161,7 +161,8 @@ export default function SalonPage() {
   >(new Map());
   const [monthBookings, setMonthBookings] = useState<BookingSlot[]>([]);
   const [scheduleLoading, setScheduleLoading] = useState(false);
-
+  const [showWaitlist, setShowWaitlist] = useState(false);
+  const [waitlistSlot, setWaitlistSlot] = useState<{ startsAt: string; endsAt: string; time: string } | null>(null);
   const fetchSalonData = useCallback(async () => {
     if (!slug) return;
     setLoading(true);
@@ -348,6 +349,28 @@ export default function SalonPage() {
     monthBookings,
   ]);
 
+  const occupiedSlots = useMemo(() => {
+    if (!selectedDateKey || !selectedService) return [];
+    return monthBookings
+      .filter((b) => {
+        const bDate = toDateKey(new Date(b.starts_at));
+        if (bDate !== selectedDateKey) return false;
+        if (selectedStaffId) return b.staff_id === selectedStaffId;
+        return true;
+      })
+      .map((b) => ({
+        time: new Date(b.starts_at).toLocaleTimeString("nb-NO", {
+          hour: "2-digit",
+          minute: "2-digit",
+        }),
+        startsAt: b.starts_at,
+        endsAt: new Date(
+          new Date(b.starts_at).getTime() + selectedService.duration_min * 60000
+        ).toISOString(),
+      }))
+      .filter((b) => !availableSlots.includes(b.time));
+  }, [selectedDateKey, selectedStaffId, monthBookings, availableSlots, selectedService]);
+
   const selectedDayInactive = useMemo(() => {
     if (!selectedDateKey) return false;
     const day = buildDateTime(selectedDateKey, "09:00");
@@ -429,6 +452,14 @@ export default function SalonPage() {
     });
   }
 
+  function sendReviewRequest(bookingId: string) {
+    void fetch("/api/reviews/request", {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ booking_id: bookingId }),
+    });
+  }
+
   const prepareWalletBooking = async (): Promise<string | null> => {
     if (!canConfirm) return null;
     setSubmitting(true);
@@ -443,6 +474,7 @@ export default function SalonPage() {
     }
 
     sendConfirmationSms(booking.id);
+    sendReviewRequest(booking.id);
     return booking.id;
   };
 
@@ -488,6 +520,7 @@ export default function SalonPage() {
         }
 
         sendConfirmationSms(booking.id);
+        sendReviewRequest(booking.id);
         window.location.href = data.url;
         return;
       } catch {
@@ -499,6 +532,7 @@ export default function SalonPage() {
 
     setSubmitting(false);
     sendConfirmationSms(booking.id);
+    sendReviewRequest(booking.id);
 
     const confirmedBooking = buildConfirmedBooking();
     if (confirmedBooking) setConfirmed(confirmedBooking);
@@ -821,28 +855,49 @@ export default function SalonPage() {
                       <p className="text-sm text-[#7A9A8E]">
                         Ingen ledige tider denne dagen
                       </p>
-                    ) : (
-                      <div className="grid grid-cols-2 gap-3 sm:grid-cols-4">
-                        {availableSlots.map((slot) => {
-                          const selected = selectedTime === slot;
-                          return (
-                            <button
-                              key={slot}
-                              type="button"
-                              onClick={() => setSelectedTime(slot)}
-                              className={`min-h-12 rounded-xl border text-base font-bold transition-colors active:scale-[0.98] ${
-                                selected
-                                  ? "border-[#0F6E56] bg-[#0F6E56] text-white"
-                                  : "border-[#C8E6D8] active:border-[#5DCAA5]"
-                              }`}
-                            >
-                              {slot}
-                            </button>
-                          );
-                        })}
-                      </div>
-                    )}
-                  </>
+) : (
+  <div className="space-y-3">
+    <div className="grid grid-cols-2 gap-3 sm:grid-cols-4">
+      {availableSlots.map((slot) => {
+        const selected = selectedTime === slot;
+        return (
+          <button
+            key={slot}
+            type="button"
+            onClick={() => setSelectedTime(slot)}
+            className={`min-h-12 rounded-xl border text-base font-bold transition-colors active:scale-[0.98] ${
+              selected
+                ? "border-[#0F6E56] bg-[#0F6E56] text-white"
+                : "border-[#C8E6D8] active:border-[#5DCAA5]"
+            }`}
+          >
+            {slot}
+          </button>
+        );
+      })}
+    </div>
+    {occupiedSlots.length > 0 && (
+      <div>
+        <p className="mb-2 text-xs text-[#7A9A8E]">Opptatt — meld deg på venteliste:</p>
+        <div className="grid grid-cols-2 gap-3 sm:grid-cols-4">
+          {occupiedSlots.map((slot) => (
+            <button
+              key={slot.time}
+              type="button"
+              onClick={() => {
+                setWaitlistSlot(slot);
+                setShowWaitlist(true);
+              }}
+              className="min-h-12 rounded-xl border border-dashed border-[#C8E6D8] bg-[#f5f5f5] text-sm font-semibold text-[#7A9A8E] transition-colors hover:border-[#5DCAA5] hover:text-[#0F6E56]"
+            >
+              {slot.time} 🔔
+            </button>
+          ))}
+        </div>
+      </div>
+    )}
+  </div>
+)}                  </>
                 )
               ) : (
                 <p className="text-sm text-[#4A6B5E]">{no.booking.selectDateFirst}</p>
@@ -1098,6 +1153,20 @@ export default function SalonPage() {
           )}
         </div>
       </div>
+      {salon && waitlistSlot && selectedService && (
+        <WaitlistModal
+          isOpen={showWaitlist}
+          onClose={() => setShowWaitlist(false)}
+          salonId={salon.id}
+          serviceId={selectedService.id}
+          staffId={selectedStaffId ?? ""}
+          startsAt={waitlistSlot.startsAt}
+          endsAt={waitlistSlot.endsAt}
+          salonName={salon.name}
+          dateStr={formatDateLong(new Date(waitlistSlot.startsAt))}
+          timeStr={waitlistSlot.time}
+        />
+      )}
     </main>
   );
 }
