@@ -6,6 +6,7 @@ import { Logo } from "@/components/Logo";
 import { no } from "@/i18n/no";
 import type { Database } from "@/lib/database.types";
 import { createClient } from "@/lib/supabase";
+import QrCodeModal from "@/components/QrCodeModal";
 import {
   defaultWeekSchedule,
   mergeWithDefaults,
@@ -20,7 +21,7 @@ import {
 import { PAYMENT_OPTIONS } from "@/lib/payments/methods";
 import { FREE_TRIAL_MONTHS } from "@/lib/pricing/plans";
 
-type AdminTab = "calendar" | "services" | "staff" | "clients" | "invoices" | "settings";
+type AdminTab = "calendar" | "services" | "staff" | "clients" | "invoices" | "settings" | "reviews";
 
 type Salon = Database["public"]["Tables"]["salons"]["Row"];
 type Service = Database["public"]["Tables"]["services"]["Row"];
@@ -208,6 +209,7 @@ const TABS: { id: AdminTab; label: string; icon: string }[] = [
   { id: "staff", label: no.admin.staff, icon: "👤" },
   { id: "clients", label: no.admin.clients, icon: "👥" },
   { id: "invoices", label: no.admin.invoices, icon: "🧾" },
+  { id: "reviews", label: "Anmeldelser", icon: "⭐" },
   { id: "settings", label: no.admin.settings, icon: "⚙️" },
 ];
 
@@ -229,6 +231,7 @@ function ActiveBadge({ active }: { active: boolean }) {
 export default function AdminPage() {
   const router = useRouter();
   const [tab, setTab] = useState<AdminTab>("calendar");
+  const [showQr, setShowQr] = useState(false);
   const [notifVisible, setNotifVisible] = useState(true);
   const [viewDate, setViewDate] = useState(() => new Date());
   const [selectedDay, setSelectedDay] = useState<string | null>(null);
@@ -797,6 +800,12 @@ export default function AdminPage() {
           >
             {salon.slug}.bookti.no ↗
           </a>
+          <button
+            onClick={() => setShowQr(true)}
+            className="flex items-center gap-1.5 rounded-xl border border-[#C8E6D8] bg-white px-3 py-2 text-sm font-semibold text-[#0F6E56] hover:bg-[#EFF8F4] transition-colors"
+          >
+            <span>📱 QR-kode</span>
+          </button>
         </header>
 
         <div className="p-8">
@@ -1202,6 +1211,10 @@ export default function AdminPage() {
             </>
           )}
 
+          {tab === "reviews" && (
+            <ReviewsTab salonId={salon?.id ?? ""} />
+          )}
+
           {tab === "settings" && (
             <div className="max-w-lg space-y-6">
               <section className="rounded-xl border border-[#C8E6D8] bg-white p-5 shadow-sm">
@@ -1404,315 +1417,82 @@ export default function AdminPage() {
             </div>
           )}
         </div>
-      </main>
+      <QrCodeModal
+        isOpen={showQr}
+        onClose={() => setShowQr(false)}
+        salonName={salon?.name ?? ""}
+        slug={salon?.slug ?? ""}
+      />
+    </main>
+    </div>
+  );
+}
 
-      {serviceModalOpen && (
-        <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/30 p-4">
-          <div className="w-full max-w-md rounded-xl border border-[#C8E6D8] bg-white shadow-xl">
-            <div className="flex items-center justify-between border-b border-[#C8E6D8] px-5 py-4">
-              <h3 className="text-sm font-bold text-[#0F6E56]">
-                {editingService ? "Rediger tjeneste" : "Legg til tjeneste"}
-              </h3>
-              <button
-                onClick={closeServiceModal}
-                className="flex h-8 w-8 items-center justify-center rounded-lg text-[#7A9A8E] hover:bg-[#d1f0e4]"
-                aria-label="Lukk"
-              >
-                ✕
-              </button>
-            </div>
-            <form onSubmit={saveService} className="space-y-4 p-5">
-              <div>
-                <label className="text-xs font-bold text-[#7A9A8E]">Navn</label>
-                <input
-                  required
-                  value={serviceForm.name}
-                  onChange={(e) => setServiceForm((f) => ({ ...f, name: e.target.value }))}
-                  className={inputClass}
-                />
-              </div>
-              <div>
-                <label className="text-xs font-bold text-[#7A9A8E]">Beskrivelse</label>
-                <textarea
-                  value={serviceForm.description}
-                  onChange={(e) => setServiceForm((f) => ({ ...f, description: e.target.value }))}
-                  rows={3}
-                  className={inputClass}
-                />
-              </div>
-              <div className="grid grid-cols-2 gap-3">
-                <div>
-                  <label className="text-xs font-bold text-[#7A9A8E]">Varighet (min)</label>
-                  <input
-                    required
-                    type="number"
-                    min={1}
-                    value={serviceForm.duration_min}
-                    onChange={(e) => setServiceForm((f) => ({ ...f, duration_min: e.target.value }))}
-                    className={inputClass}
-                  />
+function ReviewsTab({ salonId }: { salonId: string }) {
+  const [reviews, setReviews] = useState<any[]>([])
+  const [loading, setLoading] = useState(true)
+
+  useEffect(() => {
+    if (!salonId) return
+    const supabase = createClient()
+    supabase
+      .from('reviews')
+      .select('*')
+      .eq('salon_id', salonId)
+      .not('submitted_at', 'is', null)
+      .order('submitted_at', { ascending: false })
+      .then(({ data }) => {
+        setReviews(data ?? [])
+        setLoading(false)
+      })
+  }, [salonId])
+
+  const avg = reviews.length
+    ? (reviews.reduce((s, r) => s + r.rating, 0) / reviews.length).toFixed(1)
+    : null
+
+  if (loading) return <p className="text-sm text-[#4A6B5E]">Laster…</p>
+
+  return (
+    <div className="space-y-6">
+      <div className="flex items-center gap-4 rounded-xl bg-[#EFF8F4] p-4">
+        <div className="text-4xl font-black text-[#0F6E56]">{avg ?? "–"}</div>
+        <div>
+          <div className="flex gap-0.5">
+            {[1,2,3,4,5].map(s => (
+              <span key={s} className={`text-xl ${avg && s <= Math.round(Number(avg)) ? 'opacity-100' : 'opacity-20'}`}>⭐</span>
+            ))}
+          </div>
+          <p className="text-sm text-[#4A6B5E] mt-1">{reviews.length} anmeldelser</p>
+        </div>
+      </div>
+
+      {reviews.length === 0 ? (
+        <p className="text-sm text-[#7A9A8E]">Ingen anmeldelser ennå.</p>
+      ) : (
+        <div className="space-y-3">
+          {reviews.map(r => (
+            <div key={r.id} className="rounded-xl border border-[#C8E6D8] bg-white p-4">
+              <div className="flex items-center justify-between mb-2">
+                <div className="flex items-center gap-2">
+                  <span className="font-semibold text-sm">{r.client_name}</span>
+                  <div className="flex gap-0.5">
+                    {[1,2,3,4,5].map(s => (
+                      <span key={s} className={`text-sm ${s <= r.rating ? 'opacity-100' : 'opacity-20'}`}>⭐</span>
+                    ))}
+                  </div>
                 </div>
-                <div>
-                  <label className="text-xs font-bold text-[#7A9A8E]">Pris (NOK)</label>
-                  <input
-                    required
-                    type="number"
-                    min={0}
-                    value={serviceForm.price_nok}
-                    onChange={(e) => setServiceForm((f) => ({ ...f, price_nok: e.target.value }))}
-                    className={inputClass}
-                  />
-                </div>
+                <span className="text-xs text-[#7A9A8E]">
+                  {new Date(r.submitted_at).toLocaleDateString('nb-NO')}
+                </span>
               </div>
-              <label className="flex items-center gap-3 text-sm font-semibold">
-                <input
-                  type="checkbox"
-                  checked={serviceForm.is_active}
-                  onChange={(e) => setServiceForm((f) => ({ ...f, is_active: e.target.checked }))}
-                  className="accent-[#0F6E56]"
-                />
-                Aktiv
-              </label>
-              <div className="flex gap-2 pt-2">
-                <button
-                  type="button"
-                  onClick={closeServiceModal}
-                  className="flex-1 rounded-lg border border-[#C8E6D8] py-2.5 text-sm font-bold text-[#4A6B5E] hover:bg-[#EFF8F4]"
-                >
-                  {no.common.cancel}
-                </button>
-                <button
-                  type="submit"
-                  disabled={serviceSaving}
-                  className="btn-primary flex-1 rounded-lg py-2.5 text-sm font-bold text-white disabled:opacity-60"
-                >
-                  {serviceSaving ? no.common.loading : no.common.confirm}
-                </button>
-              </div>
-            </form>
-          </div>
-        </div>
-      )}
-
-      {staffModalOpen && (
-        <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/30 p-4">
-          <div className="w-full max-w-md rounded-xl border border-[#C8E6D8] bg-white shadow-xl">
-            <div className="flex items-center justify-between border-b border-[#C8E6D8] px-5 py-4">
-              <h3 className="text-sm font-bold text-[#0F6E56]">
-                {editingStaff ? "Rediger ansatt" : "Legg til ansatt"}
-              </h3>
-              <button
-                onClick={closeStaffModal}
-                className="flex h-8 w-8 items-center justify-center rounded-lg text-[#7A9A8E] hover:bg-[#d1f0e4]"
-                aria-label="Lukk"
-              >
-                ✕
-              </button>
+              {r.comment && (
+                <p className="text-sm text-[#4A6B5E] italic">"{r.comment}"</p>
+              )}
             </div>
-            <form onSubmit={saveStaff} className="space-y-4 p-5">
-              <div>
-                <label className="text-xs font-bold text-[#7A9A8E]">Navn</label>
-                <input
-                  required
-                  value={staffForm.name}
-                  onChange={(e) => setStaffForm((f) => ({ ...f, name: e.target.value }))}
-                  className={inputClass}
-                />
-              </div>
-              <div>
-                <label className="text-xs font-bold text-[#7A9A8E]">Tittel</label>
-                <input
-                  value={staffForm.title}
-                  onChange={(e) => setStaffForm((f) => ({ ...f, title: e.target.value }))}
-                  className={inputClass}
-                />
-              </div>
-              <div>
-                <label className="text-xs font-bold text-[#7A9A8E]">Telefon</label>
-                <input
-                  type="tel"
-                  value={staffForm.phone}
-                  onChange={(e) => setStaffForm((f) => ({ ...f, phone: e.target.value }))}
-                  className={inputClass}
-                />
-              </div>
-              <label className="flex items-center gap-3 text-sm font-semibold">
-                <input
-                  type="checkbox"
-                  checked={staffForm.is_active}
-                  onChange={(e) => setStaffForm((f) => ({ ...f, is_active: e.target.checked }))}
-                  className="accent-[#0F6E56]"
-                />
-                Aktiv
-              </label>
-              <div className="flex gap-2 pt-2">
-                <button
-                  type="button"
-                  onClick={closeStaffModal}
-                  className="flex-1 rounded-lg border border-[#C8E6D8] py-2.5 text-sm font-bold text-[#4A6B5E] hover:bg-[#EFF8F4]"
-                >
-                  {no.common.cancel}
-                </button>
-                <button
-                  type="submit"
-                  disabled={staffSaving}
-                  className="btn-primary flex-1 rounded-lg py-2.5 text-sm font-bold text-white disabled:opacity-60"
-                >
-                  {staffSaving ? no.common.loading : no.common.confirm}
-                </button>
-              </div>
-            </form>
-          </div>
-        </div>
-      )}
-
-      {deleteServiceId && (
-        <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/30 p-4">
-          <div className="w-full max-w-sm rounded-xl border border-[#C8E6D8] bg-white p-5 shadow-xl">
-            <h3 className="text-sm font-bold text-[#0F6E56]">Slett tjeneste?</h3>
-            <p className="mt-2 text-sm text-[#4A6B5E]">
-              Denne handlingen kan ikke angres.
-            </p>
-            <div className="mt-4 flex gap-2">
-              <button
-                onClick={() => setDeleteServiceId(null)}
-                className="flex-1 rounded-lg border border-[#C8E6D8] py-2.5 text-sm font-bold text-[#4A6B5E] hover:bg-[#EFF8F4]"
-              >
-                {no.common.cancel}
-              </button>
-              <button
-                onClick={confirmDeleteService}
-                className="flex-1 rounded-lg bg-[#dc2626] py-2.5 text-sm font-bold text-white hover:bg-[#b91c1c]"
-              >
-                Slett
-              </button>
-            </div>
-          </div>
-        </div>
-      )}
-
-      {availabilityStaff && (
-        <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/30 p-4">
-          <div className="max-h-[90vh] w-full max-w-lg overflow-y-auto rounded-xl border border-[#C8E6D8] bg-white shadow-xl">
-            <div className="sticky top-0 flex items-center justify-between border-b border-[#C8E6D8] bg-white px-5 py-4">
-              <h3 className="text-sm font-bold text-[#0F6E56]">
-                📅 Arbeidstider for {availabilityStaff.name}
-              </h3>
-              <button
-                onClick={closeAvailabilityModal}
-                className="flex h-8 w-8 items-center justify-center rounded-lg text-[#7A9A8E] hover:bg-[#d1f0e4]"
-                aria-label="Lukk"
-              >
-                ✕
-              </button>
-            </div>
-            {availabilityLoading ? (
-              <p className="p-5 text-sm text-[#4A6B5E]">{no.common.loading}</p>
-            ) : (
-              <form onSubmit={saveAvailability} className="space-y-3 p-5">
-                {WEEKDAY_LABELS.map(({ day_of_week, label }) => {
-                  const row =
-                    availabilityForm.find((r) => r.day_of_week === day_of_week) ??
-                    defaultWeekSchedule().find((r) => r.day_of_week === day_of_week)!;
-
-                  return (
-                    <div
-                      key={day_of_week}
-                      className={`rounded-lg border px-3 py-3 ${
-                        row.is_active ? "border-[#C8E6D8] bg-[#f0faf6]/40" : "border-[#C8E6D8]/60 bg-white"
-                      }`}
-                    >
-                      <div className="flex items-center justify-between gap-3">
-                        <span className="text-sm font-semibold text-[#1a3d30]">{label}</span>
-                        <label className="flex cursor-pointer items-center gap-2">
-                          <span className="text-[10px] font-bold text-[#7A9A8E]">
-                            {row.is_active ? "Aktiv" : "Inaktiv"}
-                          </span>
-                          <input
-                            type="checkbox"
-                            checked={row.is_active}
-                            onChange={(e) =>
-                              updateAvailabilityDay(day_of_week, { is_active: e.target.checked })
-                            }
-                            className="accent-[#0F6E56]"
-                          />
-                        </label>
-                      </div>
-                      {row.is_active && (
-                        <div className="mt-2 grid grid-cols-2 gap-2">
-                          <div>
-                            <label className="text-[10px] font-bold text-[#7A9A8E]">Fra</label>
-                            <input
-                              type="time"
-                              value={row.start_time.slice(0, 5)}
-                              onChange={(e) =>
-                                updateAvailabilityDay(day_of_week, { start_time: e.target.value })
-                              }
-                              className={inputClass}
-                            />
-                          </div>
-                          <div>
-                            <label className="text-[10px] font-bold text-[#7A9A8E]">Til</label>
-                            <input
-                              type="time"
-                              value={row.end_time.slice(0, 5)}
-                              onChange={(e) =>
-                                updateAvailabilityDay(day_of_week, { end_time: e.target.value })
-                              }
-                              className={inputClass}
-                            />
-                          </div>
-                        </div>
-                      )}
-                    </div>
-                  );
-                })}
-                <div className="flex gap-2 pt-2">
-                  <button
-                    type="button"
-                    onClick={closeAvailabilityModal}
-                    className="flex-1 rounded-lg border border-[#C8E6D8] py-2.5 text-sm font-bold text-[#4A6B5E] hover:bg-[#EFF8F4]"
-                  >
-                    {no.common.cancel}
-                  </button>
-                  <button
-                    type="submit"
-                    disabled={availabilitySaving}
-                    className="btn-primary flex-1 rounded-lg py-2.5 text-sm font-bold text-white disabled:opacity-60"
-                  >
-                    {availabilitySaving ? no.common.loading : "Lagre"}
-                  </button>
-                </div>
-              </form>
-            )}
-          </div>
-        </div>
-      )}
-
-      {deleteStaffId && (
-        <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/30 p-4">
-          <div className="w-full max-w-sm rounded-xl border border-[#C8E6D8] bg-white p-5 shadow-xl">
-            <h3 className="text-sm font-bold text-[#0F6E56]">Slett ansatt?</h3>
-            <p className="mt-2 text-sm text-[#4A6B5E]">
-              Denne handlingen kan ikke angres.
-            </p>
-            <div className="mt-4 flex gap-2">
-              <button
-                onClick={() => setDeleteStaffId(null)}
-                className="flex-1 rounded-lg border border-[#C8E6D8] py-2.5 text-sm font-bold text-[#4A6B5E] hover:bg-[#EFF8F4]"
-              >
-                {no.common.cancel}
-              </button>
-              <button
-                onClick={confirmDeleteStaff}
-                className="flex-1 rounded-lg bg-[#dc2626] py-2.5 text-sm font-bold text-white hover:bg-[#b91c1c]"
-              >
-                Slett
-              </button>
-            </div>
-          </div>
+          ))}
         </div>
       )}
     </div>
-  );
+  )
 }
