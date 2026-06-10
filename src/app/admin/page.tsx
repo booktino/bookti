@@ -1017,6 +1017,24 @@ export default function AdminPage() {
                                   {b.staffName}
                                 </div>
                                 {b.status === "kommende" && (
+                                  <>
+                                  <button
+                                    onClick={async () => {
+                                      const freq = prompt(`Sett opp fast time for ${b.customerName}?\n\nSkriv frekvens:\n- weekly (hver uke)\n- biweekly (annenhver uke)\n- monthly (hver måned)`)
+                                      if (!freq) return
+                                      const occ = prompt('Antall ganger? (standard: 8)') || '8'
+                                      const res = await fetch('/api/bookings/recurring', {
+                                        method: 'POST',
+                                        headers: { 'Content-Type': 'application/json' },
+                                        body: JSON.stringify({ booking_id: b.id, frequency: freq, occurrences: parseInt(occ) }),
+                                      }).then(r => r.json())
+                                      if (res.success) alert(`✅ ${res.created} faste timer opprettet! SMS sendt til kunden.`)
+                                      else alert('Noe gikk galt.')
+                                    }}
+                                    className="mt-2 w-full rounded-lg border border-[#C8E6D8] bg-[#EFF8F4] py-1 text-xs font-semibold text-[#0F6E56] hover:bg-[#d1f0e4] transition-colors"
+                                  >
+                                    🔁 Gjenta time
+                                  </button>
                                   <button
                                     onClick={async () => {
                                       if (!confirm(`Marker ${b.customerName} som no-show?`)) return
@@ -1035,6 +1053,7 @@ export default function AdminPage() {
                                   >
                                     Ikke møtt opp
                                   </button>
+                                  </>
                                 )}
                               </div>
                             ))}
