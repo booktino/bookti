@@ -136,6 +136,7 @@ export async function POST(request: NextRequest) {
     const occupied = [...(existingBookings ?? [])]
     const toCreate: typeof bookingsToCreate = []
     const rescheduled: { original: string; new: string }[] = []
+    const skipped: string[] = []
 
     for (const planned of bookingsToCreate) {
       const plannedStart = new Date(planned.starts_at)
@@ -148,7 +149,10 @@ export async function POST(request: NextRequest) {
           start_time,
           occupied,
         )
-        if (!alternativeStart) continue
+        if (!alternativeStart) {
+          skipped.push(formatDisplayDate(plannedStart))
+          continue
+        }
 
         const alternativeEnd = new Date(alternativeStart.getTime() + durationMs)
         const rescheduledBooking = {
@@ -200,7 +204,7 @@ export async function POST(request: NextRequest) {
       })
     }
 
-    return NextResponse.json({ success: true, created: createdCount, rescheduled })
+    return NextResponse.json({ success: true, created: createdCount, rescheduled, skipped })
   } catch (err) {
     console.error('Recurring error:', err)
     return NextResponse.json({ error: 'Server error' }, { status: 500 })

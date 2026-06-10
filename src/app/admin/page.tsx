@@ -295,6 +295,7 @@ function RecurringModal({
   const [success, setSuccess] = useState<{
     created: number;
     rescheduled: { original: string; new: string }[];
+    skipped: string[];
   } | null>(null);
   const [error, setError] = useState<string | null>(null);
 
@@ -314,7 +315,11 @@ function RecurringModal({
       }).then((r) => r.json());
 
       if (res.success) {
-        setSuccess({ created: res.created, rescheduled: res.rescheduled ?? [] });
+        setSuccess({
+          created: res.created,
+          rescheduled: res.rescheduled ?? [],
+          skipped: res.skipped ?? [],
+        });
       } else {
         setError("Noe gikk galt.");
       }
@@ -335,21 +340,38 @@ function RecurringModal({
         onClick={(e) => e.stopPropagation()}
       >
         {success ? (
-          <>
-            <div className="mb-6 space-y-3 rounded-xl border border-[#5DCAA5]/40 bg-[#e2f5ee] px-4 py-5 text-center">
-              <p className="text-sm font-semibold text-[#0F6E56]">
+          <div className="flex flex-col gap-3">
+            <div className="rounded-xl border border-green-200 bg-green-50 p-4">
+              <p className="text-sm font-semibold text-green-800">
                 ✅ {success.created} faste timer opprettet!
               </p>
-              {success.rescheduled.length > 0 && (
-                <p className="text-sm font-semibold text-[#0F6E56]">
-                  🔄 {success.rescheduled.length}{" "}
-                  {success.rescheduled.length === 1 ? "time ble flyttet" : "timer ble flyttet"}:{" "}
-                  {success.rescheduled
-                    .map((r) => `${r.original} → ${r.new}`)
-                    .join(", ")}
-                </p>
-              )}
             </div>
+            {success.rescheduled.length > 0 && (
+              <div className="rounded-xl border border-yellow-200 bg-yellow-50 p-4">
+                <p className="text-sm font-semibold text-yellow-800">🔄 Flyttede timer:</p>
+                <ul className="mt-2 space-y-1">
+                  {success.rescheduled.map((r, i) => (
+                    <li key={i} className="text-sm text-yellow-800">
+                      {r.original} → {r.new}
+                    </li>
+                  ))}
+                </ul>
+              </div>
+            )}
+            {success.skipped.length > 0 && (
+              <div className="rounded-xl border border-red-200 bg-red-50 p-4">
+                <p className="text-sm font-semibold text-red-800">
+                  ⚠️ Ikke funnet ledig tid for:
+                </p>
+                <ul className="mt-2 space-y-1">
+                  {success.skipped.map((s, i) => (
+                    <li key={i} className="text-sm text-red-800">
+                      {s}
+                    </li>
+                  ))}
+                </ul>
+              </div>
+            )}
             <button
               type="button"
               onClick={onClose}
@@ -357,7 +379,7 @@ function RecurringModal({
             >
               Lukk
             </button>
-          </>
+          </div>
         ) : (
           <>
             <h2 className="mb-5 text-lg font-bold text-[#0F6E56]">
