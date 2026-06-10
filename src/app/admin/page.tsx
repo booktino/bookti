@@ -246,19 +246,53 @@ const RECURRING_FREQUENCY_OPTIONS: { id: RecurringFrequency; label: string }[] =
   { id: "monthly", label: "Hver måned" },
 ];
 
+const RECURRING_TIME_OPTIONS = (() => {
+  const options: string[] = [];
+  for (let hour = 8; hour <= 20; hour++) {
+    for (const minute of [0, 30]) {
+      if (hour === 20 && minute === 30) break;
+      options.push(
+        `${String(hour).padStart(2, "0")}:${String(minute).padStart(2, "0")}`,
+      );
+    }
+  }
+  return options;
+})();
+
+function normalizeRecurringStartTime(time: string): string {
+  const match = time.match(/(\d{1,2})[.:](\d{2})/);
+  if (!match) return RECURRING_TIME_OPTIONS[0];
+  const totalMinutes = parseInt(match[1], 10) * 60 + parseInt(match[2], 10);
+  const minMinutes = 8 * 60;
+  const maxMinutes = 20 * 60;
+  const clamped = Math.min(maxMinutes, Math.max(minMinutes, totalMinutes));
+  const rounded = Math.round(clamped / 30) * 30;
+  const hours = Math.floor(rounded / 60);
+  const minutes = rounded % 60;
+  const normalized = `${String(hours).padStart(2, "0")}:${String(minutes).padStart(2, "0")}`;
+  return RECURRING_TIME_OPTIONS.includes(normalized)
+    ? normalized
+    : RECURRING_TIME_OPTIONS[0];
+}
+
 function RecurringModal({
   bookingId,
   customerName,
+  defaultStartTime,
   onClose,
 }: {
   bookingId: string;
   customerName: string;
+  defaultStartTime: string;
   onClose: () => void;
 }) {
   const [frequency, setFrequency] = useState<RecurringFrequency>("weekly");
+  const [startTime, setStartTime] = useState(() =>
+    normalizeRecurringStartTime(defaultStartTime),
+  );
   const [occurrences, setOccurrences] = useState(8);
   const [submitting, setSubmitting] = useState(false);
-  const [success, setSuccess] = useState<{ created: number } | null>(null);
+  const [success, setSuccess] = useState<{ created: number; skipped: string[] } | null>(null);
   const [error, setError] = useState<string | null>(null);
 
   async function handleSubmit() {
@@ -268,11 +302,16 @@ function RecurringModal({
       const res = await fetch("/api/bookings/recurring", {
         method: "POST",
         headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ booking_id: bookingId, frequency, occurrences }),
+        body: JSON.stringify({
+          booking_id: bookingId,
+          frequency,
+          occurrences,
+          start_time: startTime,
+        }),
       }).then((r) => r.json());
 
       if (res.success) {
-        setSuccess({ created: res.created });
+        setSuccess({ created: res.created, skipped: res.skipped ?? [] });
       } else {
         setError("Noe gikk galt.");
       }
@@ -294,10 +333,16 @@ function RecurringModal({
       >
         {success ? (
           <>
-            <div className="mb-6 rounded-xl border border-[#5DCAA5]/40 bg-[#e2f5ee] px-4 py-5 text-center">
+            <div className="mb-6 space-y-3 rounded-xl border border-[#5DCAA5]/40 bg-[#e2f5ee] px-4 py-5 text-center">
               <p className="text-sm font-semibold text-[#0F6E56]">
-                ✅ {success.created} faste timer opprettet! SMS sendt til {customerName}.
+                ✅ {success.created} faste timer opprettet!
               </p>
+              {success.skipped.length > 0 && (
+                <p className="text-sm font-semibold text-amber-700">
+                  ⚠️ {success.skipped.length} timer ble hoppet over pga konflikt:{" "}
+                  {success.skipped.join(", ")}
+                </p>
+              )}
             </div>
             <button
               type="button"
@@ -330,6 +375,21 @@ function RecurringModal({
                 </button>
               ))}
             </div>
+
+            <label className="mb-5 block">
+              <span className="text-xs font-bold text-[#7A9A8E]">Tidspunkt</span>
+              <select
+                value={startTime}
+                onChange={(e) => setStartTime(e.target.value)}
+                className={inputClass}
+              >
+                {RECURRING_TIME_OPTIONS.map((time) => (
+                  <option key={time} value={time}>
+                    {time}
+                  </option>
+                ))}
+              </select>
+            </label>
 
             <label className="mb-5 block">
               <span className="text-xs font-bold text-[#7A9A8E]">Antall ganger</span>
@@ -422,6 +482,7 @@ export default function AdminPage() {
   const [recurringModal, setRecurringModal] = useState<{
     bookingId: string;
     customerName: string;
+    defaultStartTime: string;
   } | null>(null);
 
   useEffect(() => {
@@ -1178,6 +1239,7 @@ export default function AdminPage() {
                                       setRecurringModal({
                                         bookingId: b.id,
                                         customerName: b.customerName,
+                                        defaultStartTime: b.time,
                                       })
                                     }
                                     className="mt-2 w-full rounded-lg border border-[#C8E6D8] bg-[#EFF8F4] py-1 text-xs font-semibold text-[#0F6E56] hover:bg-[#d1f0e4] transition-colors"
@@ -1633,6 +1695,7 @@ export default function AdminPage() {
         <RecurringModal
           bookingId={recurringModal.bookingId}
           customerName={recurringModal.customerName}
+          defaultStartTime={recurringModal.defaultStartTime}
           onClose={() => setRecurringModal(null)}
         />
       )}
