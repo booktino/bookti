@@ -1547,67 +1547,249 @@ type StatsBookingRow = {
   services: { name: string } | { name: string }[] | null;
 };
 
+type ChartBookingRow = {
+  starts_at: string;
+  price_nok: number | null;
+};
+
+type ChartDataPoint = {
+  label: string;
+  inntekt: number;
+  avtaler: number;
+};
+
+type ChartPeriod = "dag" | "uke" | "maaned" | "6maaneder";
+
+const MONTHS_SHORT = [
+  "Jan",
+  "Feb",
+  "Mar",
+  "Apr",
+  "Mai",
+  "Jun",
+  "Jul",
+  "Aug",
+  "Sep",
+  "Okt",
+  "Nov",
+  "Des",
+] as const;
+
+const PERIOD_OPTIONS: { id: ChartPeriod; label: string }[] = [
+  { id: "dag", label: "Dag" },
+  { id: "uke", label: "Uke" },
+  { id: "maaned", label: "Måned" },
+  { id: "6maaneder", label: "6 måneder" },
+];
+
+function getChartPeriodStart(period: ChartPeriod): Date {
+  const from = new Date();
+  switch (period) {
+    case "dag":
+      from.setTime(from.getTime() - 24 * 60 * 60 * 1000);
+      return from;
+    case "uke":
+      from.setDate(from.getDate() - 6);
+      from.setHours(0, 0, 0, 0);
+      return from;
+    case "maaned":
+      from.setDate(1);
+      from.setHours(0, 0, 0, 0);
+      return from;
+    case "6maaneder":
+      from.setMonth(from.getMonth() - 5);
+      from.setDate(1);
+      from.setHours(0, 0, 0, 0);
+      return from;
+  }
+}
+
+function buildChartData(
+  bookings: ChartBookingRow[],
+  period: ChartPeriod,
+): ChartDataPoint[] {
+  const now = new Date();
+
+  if (period === "dag") {
+    const buckets = Array.from({ length: 24 }, (_, hour) => ({
+      label: String(hour).padStart(2, "0"),
+      inntekt: 0,
+      avtaler: 0,
+    }));
+    for (const b of bookings) {
+      const d = new Date(b.starts_at);
+      buckets[d.getHours()].inntekt += b.price_nok ?? 0;
+      buckets[d.getHours()].avtaler += 1;
+    }
+    return buckets;
+  }
+
+  if (period === "uke") {
+    const points: ChartDataPoint[] = [];
+    for (let i = 6; i >= 0; i--) {
+      const dayStart = new Date(now);
+      dayStart.setDate(now.getDate() - i);
+      dayStart.setHours(0, 0, 0, 0);
+      const dayEnd = new Date(dayStart);
+      dayEnd.setHours(23, 59, 59, 999);
+      const weekdayIndex = (dayStart.getDay() + 6) % 7;
+      let inntekt = 0;
+      let avtaler = 0;
+      for (const b of bookings) {
+        const d = new Date(b.starts_at);
+        if (d >= dayStart && d <= dayEnd) {
+          inntekt += b.price_nok ?? 0;
+          avtaler += 1;
+        }
+      }
+      points.push({ label: WEEKDAYS[weekdayIndex], inntekt, avtaler });
+    }
+    return points;
+  }
+
+  if (period === "maaned") {
+    const daysInMonth = new Date(now.getFullYear(), now.getMonth() + 1, 0).getDate();
+    const buckets = Array.from({ length: daysInMonth }, (_, i) => ({
+      label: String(i + 1),
+      inntekt: 0,
+      avtaler: 0,
+    }));
+    for (const b of bookings) {
+      const d = new Date(b.starts_at);
+      buckets[d.getDate() - 1].inntekt += b.price_nok ?? 0;
+      buckets[d.getDate() - 1].avtaler += 1;
+    }
+    return buckets;
+  }
+
+  const buckets: ChartDataPoint[] = [];
+  for (let i = 5; i >= 0; i--) {
+    const monthStart = new Date(now.getFullYear(), now.getMonth() - i, 1);
+    monthStart.setHours(0, 0, 0, 0);
+    const monthEnd = new Date(now.getFullYear(), now.getMonth() - i + 1, 0);
+    monthEnd.setHours(23, 59, 59, 999);
+    let inntekt = 0;
+    let avtaler = 0;
+    for (const b of bookings) {
+      const d = new Date(b.starts_at);
+      if (d >= monthStart && d <= monthEnd) {
+        inntekt += b.price_nok ?? 0;
+        avtaler += 1;
+      }
+    }
+    buckets.push({
+      label: MONTHS_SHORT[monthStart.getMonth()],
+      inntekt,
+      avtaler,
+    });
+  }
+  return buckets;
+}
+
+function getChartTitle(period: ChartPeriod, view: "inntekt" | "avtaler"): string {
+  if (view === "inntekt") {
+    switch (period) {
+      case "dag":
+        return "Inntekt siste 24 timer (NOK)";
+      case "uke":
+        return "Inntekt siste 7 dager (NOK)";
+      case "maaned":
+        return "Inntekt denne måneden (NOK)";
+      case "6maaneder":
+        return "Inntekt siste 6 måneder (NOK)";
+    }
+  }
+  switch (period) {
+    case "dag":
+      return "Antall avtaler siste 24 timer";
+    case "uke":
+      return "Antall avtaler siste 7 dager";
+    case "maaned":
+      return "Antall avtaler denne måneden";
+    case "6maaneder":
+      return "Antall avtaler siste 6 måneder";
+  }
+}
+
 function StatistikkTab({ salonId }: { salonId: string }) {
-  const [monthlyData, setMonthlyData] = useState<any[]>([])
-  const [loading, setLoading] = useState(true)
-  const [totalRevenue, setTotalRevenue] = useState(0)
-  const [totalBookings, setTotalBookings] = useState(0)
-  const [avgBookingValue, setAvgBookingValue] = useState(0)
-  const [newClients, setNewClients] = useState(0)
-  const [returningClients, setReturningClients] = useState(0)
-  const [topServices, setTopServices] = useState<TopServiceStat[]>([])
-  const [noShowRate, setNoShowRate] = useState(0)
-  const [monthlyForecast, setMonthlyForecast] = useState(0)
+  const [chartData, setChartData] = useState<ChartDataPoint[]>([]);
+  const [chartLoading, setChartLoading] = useState(true);
+  const [period, setPeriod] = useState<ChartPeriod>("6maaneder");
+  const [loading, setLoading] = useState(true);
+  const [totalRevenue, setTotalRevenue] = useState(0);
+  const [totalBookings, setTotalBookings] = useState(0);
+  const [avgBookingValue, setAvgBookingValue] = useState(0);
+  const [newClients, setNewClients] = useState(0);
+  const [returningClients, setReturningClients] = useState(0);
+  const [topServices, setTopServices] = useState<TopServiceStat[]>([]);
+  const [noShowRate, setNoShowRate] = useState(0);
+  const [monthlyForecast, setMonthlyForecast] = useState(0);
+  const [view, setView] = useState<"inntekt" | "avtaler">("inntekt");
 
   useEffect(() => {
-    if (!salonId) return
-    const supabase = createClient()
+    if (!salonId) return;
+    let cancelled = false;
+    const supabase = createClient();
+
+    async function loadChart() {
+      setChartLoading(true);
+      const from = getChartPeriodStart(period);
+
+      const { data } = await supabase
+        .from("bookings")
+        .select("starts_at, price_nok")
+        .eq("salon_id", salonId)
+        .neq("status", "cancelled")
+        .gte("starts_at", from.toISOString());
+
+      if (cancelled) return;
+
+      setChartData(buildChartData((data as ChartBookingRow[] | null) ?? [], period));
+      setChartLoading(false);
+    }
+
+    loadChart();
+    return () => {
+      cancelled = true;
+    };
+  }, [salonId, period]);
+
+  useEffect(() => {
+    if (!salonId) return;
+    const supabase = createClient();
 
     async function load() {
-      const sixMonthsAgo = new Date()
-      sixMonthsAgo.setMonth(sixMonthsAgo.getMonth() - 6)
+      const sixMonthsAgo = new Date();
+      sixMonthsAgo.setMonth(sixMonthsAgo.getMonth() - 6);
 
-      const [{ data: chartBookings }, { data: allBookings }] = await Promise.all([
+      const [{ data: summaryBookings }, { data: allBookings }] = await Promise.all([
         supabase
-          .from('bookings')
-          .select('starts_at, price_nok, status')
-          .eq('salon_id', salonId)
-          .neq('status', 'cancelled')
-          .gte('starts_at', sixMonthsAgo.toISOString()),
+          .from("bookings")
+          .select("starts_at, price_nok, status")
+          .eq("salon_id", salonId)
+          .neq("status", "cancelled")
+          .gte("starts_at", sixMonthsAgo.toISOString()),
         supabase
-          .from('bookings')
-          .select('starts_at, price_nok, status, no_show, client_phone, service_id, services(name)')
-          .eq('salon_id', salonId),
-      ])
+          .from("bookings")
+          .select("starts_at, price_nok, status, no_show, client_phone, service_id, services(name)")
+          .eq("salon_id", salonId),
+      ]);
 
-      if (!chartBookings || !allBookings) { setLoading(false); return }
+      if (!summaryBookings || !allBookings) {
+        setLoading(false);
+        return;
+      }
 
-      const statsBookings = allBookings as StatsBookingRow[]
+      const statsBookings = allBookings as StatsBookingRow[];
 
-      const byMonth: Record<string, { revenue: number; count: number }> = {}
-      const MONTHS = ['Jan','Feb','Mar','Apr','Mai','Jun','Jul','Aug','Sep','Okt','Nov','Des']
+      const total = summaryBookings.reduce((s, b) => s + (b.price_nok ?? 0), 0);
+      setTotalRevenue(total);
+      setTotalBookings(summaryBookings.length);
+      setAvgBookingValue(
+        summaryBookings.length > 0 ? Math.round(total / summaryBookings.length) : 0,
+      );
 
-      chartBookings.forEach(b => {
-        const d = new Date(b.starts_at)
-        const key = `${MONTHS[d.getMonth()]} ${d.getFullYear()}`
-        if (!byMonth[key]) byMonth[key] = { revenue: 0, count: 0 }
-        byMonth[key].revenue += b.price_nok ?? 0
-        byMonth[key].count += 1
-      })
-
-      const chartData = Object.entries(byMonth).map(([month, data]) => ({
-        month,
-        inntekt: data.revenue,
-        avtaler: data.count,
-      }))
-
-      const total = chartBookings.reduce((s, b) => s + (b.price_nok ?? 0), 0)
-      setTotalRevenue(total)
-      setTotalBookings(chartBookings.length)
-      setAvgBookingValue(chartBookings.length > 0 ? Math.round(total / chartBookings.length) : 0)
-      setMonthlyData(chartData)
-
-      const visitBookings = statsBookings.filter(b => b.status !== 'cancelled')
+      const visitBookings = statsBookings.filter((b) => b.status !== "cancelled");
       const visitsByPhone = new Map<string, number>()
       visitBookings.forEach(b => {
         visitsByPhone.set(b.client_phone, (visitsByPhone.get(b.client_phone) ?? 0) + 1)
@@ -1668,8 +1850,6 @@ function StatistikkTab({ salonId }: { salonId: string }) {
     load()
   }, [salonId])
 
-  const [view, setView] = useState<'inntekt' | 'avtaler'>('inntekt')
-
   if (loading) return <p className="text-sm text-[#4A6B5E]">Laster…</p>
 
   const statCardClass = "rounded-xl border-l-4 border-l-[#0F6E56] bg-white p-4 shadow-sm"
@@ -1724,43 +1904,72 @@ function StatistikkTab({ salonId }: { salonId: string }) {
       </div>
 
       <div className="rounded-xl border border-[#C8E6D8] bg-white p-6 shadow-sm">
-        <div className="mb-4 flex items-center justify-between">
-          <h3 className="text-sm font-bold text-[#0F6E56]">
-            {view === 'inntekt' ? 'Inntekt per måned (NOK)' : 'Antall avtaler per måned'}
+        <div className="mb-4 flex flex-wrap items-center justify-between gap-3">
+          <div className="flex overflow-hidden rounded-lg border border-[#C8E6D8] text-xs font-semibold">
+            {PERIOD_OPTIONS.map(({ id, label }) => (
+              <button
+                key={id}
+                onClick={() => setPeriod(id)}
+                className={`px-3 py-1.5 transition-colors ${
+                  period === id
+                    ? "bg-[#0F6E56] text-white"
+                    : "text-[#7A9A8E] hover:bg-[#EFF8F4]"
+                }`}
+              >
+                {label}
+              </button>
+            ))}
+          </div>
+          <h3 className="min-w-0 flex-1 px-2 text-center text-sm font-bold text-[#0F6E56]">
+            {getChartTitle(period, view)}
           </h3>
-          <div className="flex rounded-lg border border-[#C8E6D8] overflow-hidden text-xs font-semibold">
+          <div className="flex overflow-hidden rounded-lg border border-[#C8E6D8] text-xs font-semibold">
             <button
-              onClick={() => setView('inntekt')}
-              className={`px-3 py-1.5 transition-colors ${view === 'inntekt' ? 'bg-[#0F6E56] text-white' : 'text-[#7A9A8E] hover:bg-[#EFF8F4]'}`}
+              onClick={() => setView("inntekt")}
+              className={`px-3 py-1.5 transition-colors ${
+                view === "inntekt"
+                  ? "bg-[#0F6E56] text-white"
+                  : "text-[#7A9A8E] hover:bg-[#EFF8F4]"
+              }`}
             >
               Inntekt
             </button>
             <button
-              onClick={() => setView('avtaler')}
-              className={`px-3 py-1.5 transition-colors ${view === 'avtaler' ? 'bg-[#0F6E56] text-white' : 'text-[#7A9A8E] hover:bg-[#EFF8F4]'}`}
+              onClick={() => setView("avtaler")}
+              className={`px-3 py-1.5 transition-colors ${
+                view === "avtaler"
+                  ? "bg-[#0F6E56] text-white"
+                  : "text-[#7A9A8E] hover:bg-[#EFF8F4]"
+              }`}
             >
               Avtaler
             </button>
           </div>
         </div>
-        {monthlyData.length === 0 ? (
-          <p className="text-sm text-[#7A9A8E]">Ingen data ennå.</p>
+        {chartLoading ? (
+          <p className="text-sm text-[#7A9A8E]">Laster diagram…</p>
         ) : (
           <ResponsiveContainer width="100%" height={280}>
-            <BarChart data={monthlyData}>
+            <BarChart data={chartData}>
               <CartesianGrid strokeDasharray="3 3" stroke="#EFF8F4" />
-              <XAxis dataKey="month" tick={{ fontSize: 12, fill: '#7A9A8E' }} />
-              <YAxis tick={{ fontSize: 12, fill: '#7A9A8E' }} />
+              <XAxis
+                dataKey="label"
+                tick={{ fontSize: period === "maaned" ? 10 : 12, fill: "#7A9A8E" }}
+                interval={period === "maaned" ? 2 : period === "dag" ? 2 : 0}
+              />
+              <YAxis tick={{ fontSize: 12, fill: "#7A9A8E" }} />
               <Tooltip
-                formatter={(value: any) => [
-                  view === 'inntekt' ? `${Number(value).toLocaleString('nb-NO')} kr` : value,
-                  view === 'inntekt' ? 'Inntekt' : 'Avtaler'
+                formatter={(value) => [
+                  view === "inntekt"
+                    ? `${Number(value ?? 0).toLocaleString("nb-NO")} kr`
+                    : value ?? 0,
+                  view === "inntekt" ? "Inntekt" : "Avtaler",
                 ]}
-                contentStyle={{ borderRadius: '8px', border: '1px solid #C8E6D8' }}
+                contentStyle={{ borderRadius: "8px", border: "1px solid #C8E6D8" }}
               />
               <Bar
                 dataKey={view}
-                fill={view === 'inntekt' ? '#0F6E56' : '#5DCAA5'}
+                fill={view === "inntekt" ? "#0F6E56" : "#5DCAA5"}
                 radius={[4, 4, 0, 0]}
               />
             </BarChart>
