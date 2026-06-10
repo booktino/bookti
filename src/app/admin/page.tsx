@@ -292,7 +292,10 @@ function RecurringModal({
   );
   const [occurrences, setOccurrences] = useState(8);
   const [submitting, setSubmitting] = useState(false);
-  const [success, setSuccess] = useState<{ created: number; skipped: string[] } | null>(null);
+  const [success, setSuccess] = useState<{
+    created: number;
+    rescheduled: { original: string; new: string }[];
+  } | null>(null);
   const [error, setError] = useState<string | null>(null);
 
   async function handleSubmit() {
@@ -311,7 +314,7 @@ function RecurringModal({
       }).then((r) => r.json());
 
       if (res.success) {
-        setSuccess({ created: res.created, skipped: res.skipped ?? [] });
+        setSuccess({ created: res.created, rescheduled: res.rescheduled ?? [] });
       } else {
         setError("Noe gikk galt.");
       }
@@ -337,10 +340,13 @@ function RecurringModal({
               <p className="text-sm font-semibold text-[#0F6E56]">
                 ✅ {success.created} faste timer opprettet!
               </p>
-              {success.skipped.length > 0 && (
-                <p className="text-sm font-semibold text-amber-700">
-                  ⚠️ {success.skipped.length} timer ble hoppet over pga konflikt:{" "}
-                  {success.skipped.join(", ")}
+              {success.rescheduled.length > 0 && (
+                <p className="text-sm font-semibold text-[#0F6E56]">
+                  🔄 {success.rescheduled.length}{" "}
+                  {success.rescheduled.length === 1 ? "time ble flyttet" : "timer ble flyttet"}:{" "}
+                  {success.rescheduled
+                    .map((r) => `${r.original} → ${r.new}`)
+                    .join(", ")}
                 </p>
               )}
             </div>

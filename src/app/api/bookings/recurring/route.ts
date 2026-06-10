@@ -26,7 +26,7 @@ function setTimeOnDate(date: Date, startTime: string): Date {
   return d
 }
 
-function formatSkippedDate(date: Date): string {
+function formatDisplayDate(date: Date): string {
   const dateStr = date.toLocaleDateString('nb-NO', { day: 'numeric', month: 'long' })
   const timeStr = date.toLocaleTimeString('nb-NO', { hour: '2-digit', minute: '2-digit' })
   return `${dateStr} kl. ${timeStr}`
@@ -44,6 +44,29 @@ function hasConflict(
     const bEnd = new Date(b.ends_at).getTime()
     return newStart < bEnd && newEnd > bStart
   })
+}
+
+function findAlternativeSlot(
+  originalStart: Date,
+  durationMs: number,
+  startTime: string,
+  existing: { starts_at: string; ends_at: string }[],
+): Date | null {
+  for (const offsetMin of [30, 60, 90, -30, -60, -90]) {
+    const candidateStart = new Date(originalStart.getTime() + offsetMin * 60 * 1000)
+    const candidateEnd = new Date(candidateStart.getTime() + durationMs)
+    if (!hasConflict(candidateStart, candidateEnd, existing)) {
+      return candidateStart
+    }
+  }
+
+  const nextDayStart = setTimeOnDate(addDays(originalStart, 1), startTime)
+  const nextDayEnd = new Date(nextDayStart.getTime() + durationMs)
+  if (!hasConflict(nextDayStart, nextDayEnd, existing)) {
+    return nextDayStart
+  }
+
+  return null
 }
 
 export async function POST(request: NextRequest) {
@@ -99,25 +122,52 @@ export async function POST(request: NextRequest) {
 
     const minStart = bookingsToCreate[0].starts_at
     const maxEnd = bookingsToCreate[bookingsToCreate.length - 1].ends_at
+    const queryMinStart = addDays(new Date(minStart), -1).toISOString()
+    const queryMaxEnd = addDays(new Date(maxEnd), 1).toISOString()
 
     const { data: existingBookings } = await supabase
       .from('bookings')
       .select('starts_at, ends_at')
       .eq('staff_id', booking.staff_id)
       .neq('status', 'cancelled')
-      .lt('starts_at', maxEnd)
-      .gt('ends_at', minStart)
+      .lt('starts_at', queryMaxEnd)
+      .gt('ends_at', queryMinStart)
 
+    const occupied = [...(existingBookings ?? [])]
     const toCreate: typeof bookingsToCreate = []
-    const skipped: string[] = []
+    const rescheduled: { original: string; new: string }[] = []
 
     for (const planned of bookingsToCreate) {
       const plannedStart = new Date(planned.starts_at)
       const plannedEnd = new Date(planned.ends_at)
-      if (hasConflict(plannedStart, plannedEnd, existingBookings ?? [])) {
-        skipped.push(formatSkippedDate(plannedStart))
+
+      if (hasConflict(plannedStart, plannedEnd, occupied)) {
+        const alternativeStart = findAlternativeSlot(
+          plannedStart,
+          durationMs,
+          start_time,
+          occupied,
+        )
+        if (!alternativeStart) continue
+
+        const alternativeEnd = new Date(alternativeStart.getTime() + durationMs)
+        const rescheduledBooking = {
+          ...planned,
+          starts_at: alternativeStart.toISOString(),
+          ends_at: alternativeEnd.toISOString(),
+        }
+        toCreate.push(rescheduledBooking)
+        occupied.push({
+          starts_at: rescheduledBooking.starts_at,
+          ends_at: rescheduledBooking.ends_at,
+        })
+        rescheduled.push({
+          original: formatDisplayDate(plannedStart),
+          new: formatDisplayDate(alternativeStart),
+        })
       } else {
         toCreate.push(planned)
+        occupied.push({ starts_at: planned.starts_at, ends_at: planned.ends_at })
       }
     }
 
@@ -150,7 +200,7 @@ export async function POST(request: NextRequest) {
       })
     }
 
-    return NextResponse.json({ success: true, created: createdCount, skipped })
+    return NextResponse.json({ success: true, created: createdCount, rescheduled })
   } catch (err) {
     console.error('Recurring error:', err)
     return NextResponse.json({ error: 'Server error' }, { status: 500 })
