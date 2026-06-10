@@ -1612,7 +1612,7 @@ function buildChartData(
 
   if (period === "dag") {
     const buckets = Array.from({ length: 24 }, (_, hour) => ({
-      label: String(hour).padStart(2, "0"),
+      label: `${String(hour).padStart(2, "0")}:00`,
       inntekt: 0,
       avtaler: 0,
     }));
@@ -1642,15 +1642,21 @@ function buildChartData(
           avtaler += 1;
         }
       }
-      points.push({ label: WEEKDAYS[weekdayIndex], inntekt, avtaler });
+      const monthShort = MONTHS_SHORT[dayStart.getMonth()].toLowerCase();
+      points.push({
+        label: `${WEEKDAYS[weekdayIndex]} ${dayStart.getDate()}. ${monthShort}`,
+        inntekt,
+        avtaler,
+      });
     }
     return points;
   }
 
   if (period === "maaned") {
     const daysInMonth = new Date(now.getFullYear(), now.getMonth() + 1, 0).getDate();
+    const monthShort = MONTHS_SHORT[now.getMonth()].toLowerCase();
     const buckets = Array.from({ length: daysInMonth }, (_, i) => ({
-      label: String(i + 1),
+      label: `${i + 1}. ${monthShort}`,
       inntekt: 0,
       avtaler: 0,
     }));
