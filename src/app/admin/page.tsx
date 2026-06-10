@@ -124,6 +124,14 @@ function getWeekBounds() {
   return { monday, sunday };
 }
 
+function getMonthBounds(date: Date) {
+  const monthStart = new Date(date.getFullYear(), date.getMonth(), 1);
+  monthStart.setHours(0, 0, 0, 0);
+  const monthEnd = new Date(date.getFullYear(), date.getMonth() + 1, 0);
+  monthEnd.setHours(23, 59, 59, 999);
+  return { monthStart, monthEnd };
+}
+
 function countWeekdaySlots(staffCount: number) {
   const { monday } = getWeekBounds();
   let days = 0;
@@ -373,7 +381,7 @@ export default function AdminPage() {
   const [tab, setTab] = useState<AdminTab>("calendar");
   const [showQr, setShowQr] = useState(false);
   const [notifVisible, setNotifVisible] = useState(true);
-  const [viewDate, setViewDate] = useState(() => new Date());
+  const [currentCalendarDate, setCurrentCalendarDate] = useState(() => new Date());
   const [selectedDay, setSelectedDay] = useState<string | null>(null);
   const [loading, setLoading] = useState(true);
   const [salon, setSalon] = useState<Salon | null>(null);
@@ -500,17 +508,22 @@ export default function AdminPage() {
 
   const today = getTodayKey();
 
-  const calendarBookings = useMemo(
-    () => bookings.map(bookingToCalendar),
-    [bookings],
-  );
+  const calendarBookings = useMemo(() => {
+    const { monthStart, monthEnd } = getMonthBounds(currentCalendarDate);
+    return bookings
+      .filter((b) => {
+        const start = new Date(b.starts_at);
+        return start >= monthStart && start <= monthEnd;
+      })
+      .map(bookingToCalendar);
+  }, [bookings, currentCalendarDate]);
 
   const todayBookings = useMemo(
     () =>
-      calendarBookings.filter(
-        (b) => b.date === today && b.status !== "kansellert",
-      ),
-    [calendarBookings, today],
+      bookings
+        .map(bookingToCalendar)
+        .filter((b) => b.date === today && b.status !== "kansellert"),
+    [bookings, today],
   );
 
   const { monday, sunday } = getWeekBounds();
@@ -582,8 +595,8 @@ export default function AdminPage() {
       )[0];
   }, [bookings]);
 
-  const viewYear = viewDate.getFullYear();
-  const viewMonth = viewDate.getMonth();
+  const viewYear = currentCalendarDate.getFullYear();
+  const viewMonth = currentCalendarDate.getMonth();
   const calendarCells = useMemo(
     () => getCalendarCells(viewYear, viewMonth),
     [viewYear, viewMonth],
@@ -607,18 +620,18 @@ export default function AdminPage() {
     : [];
 
   function prevMonth() {
-    setViewDate((d) => new Date(d.getFullYear(), d.getMonth() - 1, 1));
+    setCurrentCalendarDate((d) => new Date(d.getFullYear(), d.getMonth() - 1, 1));
     setSelectedDay(null);
   }
 
   function nextMonth() {
-    setViewDate((d) => new Date(d.getFullYear(), d.getMonth() + 1, 1));
+    setCurrentCalendarDate((d) => new Date(d.getFullYear(), d.getMonth() + 1, 1));
     setSelectedDay(null);
   }
 
   function goToToday() {
     const now = new Date();
-    setViewDate(new Date(now.getFullYear(), now.getMonth(), 1));
+    setCurrentCalendarDate(new Date(now.getFullYear(), now.getMonth(), 1));
     setSelectedDay(today);
   }
 
