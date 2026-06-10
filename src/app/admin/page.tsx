@@ -230,6 +230,144 @@ function ActiveBadge({ active }: { active: boolean }) {
   );
 }
 
+type RecurringFrequency = "weekly" | "biweekly" | "monthly";
+
+const RECURRING_FREQUENCY_OPTIONS: { id: RecurringFrequency; label: string }[] = [
+  { id: "weekly", label: "Hver uke" },
+  { id: "biweekly", label: "Annenhver uke" },
+  { id: "monthly", label: "Hver måned" },
+];
+
+function RecurringModal({
+  bookingId,
+  customerName,
+  onClose,
+}: {
+  bookingId: string;
+  customerName: string;
+  onClose: () => void;
+}) {
+  const [frequency, setFrequency] = useState<RecurringFrequency>("weekly");
+  const [occurrences, setOccurrences] = useState(8);
+  const [submitting, setSubmitting] = useState(false);
+  const [success, setSuccess] = useState<{ created: number } | null>(null);
+  const [error, setError] = useState<string | null>(null);
+
+  async function handleSubmit() {
+    setSubmitting(true);
+    setError(null);
+    try {
+      const res = await fetch("/api/bookings/recurring", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ booking_id: bookingId, frequency, occurrences }),
+      }).then((r) => r.json());
+
+      if (res.success) {
+        setSuccess({ created: res.created });
+      } else {
+        setError("Noe gikk galt.");
+      }
+    } catch {
+      setError("Noe gikk galt.");
+    } finally {
+      setSubmitting(false);
+    }
+  }
+
+  return (
+    <div
+      className="fixed inset-0 z-50 flex items-center justify-center bg-black/60 p-4"
+      onClick={onClose}
+    >
+      <div
+        className="w-full max-w-sm rounded-2xl bg-white p-6 shadow-2xl"
+        onClick={(e) => e.stopPropagation()}
+      >
+        {success ? (
+          <>
+            <div className="mb-6 rounded-xl border border-[#5DCAA5]/40 bg-[#e2f5ee] px-4 py-5 text-center">
+              <p className="text-sm font-semibold text-[#0F6E56]">
+                ✅ {success.created} faste timer opprettet! SMS sendt til {customerName}.
+              </p>
+            </div>
+            <button
+              type="button"
+              onClick={onClose}
+              className="w-full rounded-xl bg-[#0F6E56] py-2.5 text-sm font-bold text-white transition-colors hover:bg-[#0d5c48]"
+            >
+              Lukk
+            </button>
+          </>
+        ) : (
+          <>
+            <h2 className="mb-5 text-lg font-bold text-[#0F6E56]">
+              Sett opp fast time for {customerName}
+            </h2>
+
+            <p className="mb-2 text-xs font-bold text-[#7A9A8E]">Frekvens</p>
+            <div className="mb-5 flex gap-2">
+              {RECURRING_FREQUENCY_OPTIONS.map(({ id, label }) => (
+                <button
+                  key={id}
+                  type="button"
+                  onClick={() => setFrequency(id)}
+                  className={`flex-1 rounded-lg border px-2 py-2 text-xs font-semibold transition-colors ${
+                    frequency === id
+                      ? "border-[#0F6E56] bg-[#EFF8F4] text-[#0F6E56]"
+                      : "border-[#C8E6D8] bg-white text-[#4A6B5E] hover:bg-[#EFF8F4]"
+                  }`}
+                >
+                  {label}
+                </button>
+              ))}
+            </div>
+
+            <label className="mb-5 block">
+              <span className="text-xs font-bold text-[#7A9A8E]">Antall ganger</span>
+              <input
+                type="number"
+                min={1}
+                max={52}
+                value={occurrences}
+                onChange={(e) =>
+                  setOccurrences(Math.min(52, Math.max(1, parseInt(e.target.value, 10) || 1)))
+                }
+                className={inputClass}
+              />
+            </label>
+
+            {error && (
+              <p className="mb-4 rounded-lg border border-[#fee2e2] bg-[#fee2e2]/40 px-3 py-2 text-center text-sm font-semibold text-[#dc2626]">
+                {error}
+              </p>
+            )}
+
+            <div className="flex gap-3">
+              <button
+                type="button"
+                onClick={onClose}
+                disabled={submitting}
+                className="flex-1 rounded-xl border border-[#C8E6D8] bg-[#EFF8F4] py-2.5 text-sm font-semibold text-[#4A6B5E] transition-colors hover:bg-[#C8E6D8] disabled:opacity-60"
+              >
+                Avbryt
+              </button>
+              <button
+                type="button"
+                onClick={handleSubmit}
+                disabled={submitting}
+                className="flex-1 rounded-xl bg-[#0F6E56] py-2.5 text-sm font-bold text-white transition-colors hover:bg-[#0d5c48] disabled:opacity-60"
+              >
+                {submitting ? "Oppretter…" : "Opprett"}
+              </button>
+            </div>
+          </>
+        )}
+      </div>
+    </div>
+  );
+}
+
 export default function AdminPage() {
   const router = useRouter();
   const [tab, setTab] = useState<AdminTab>("calendar");
@@ -273,6 +411,10 @@ export default function AdminPage() {
   const [cancellationFeeAmount, setCancellationFeeAmount] = useState("");
   const [settingsSaving, setSettingsSaving] = useState(false);
   const [settingsSaved, setSettingsSaved] = useState(false);
+  const [recurringModal, setRecurringModal] = useState<{
+    bookingId: string;
+    customerName: string;
+  } | null>(null);
 
   useEffect(() => {
     const id = setInterval(() => setNotifVisible((v) => !v), 2800);
@@ -1019,18 +1161,12 @@ export default function AdminPage() {
                                 {b.status === "kommende" && (
                                   <>
                                   <button
-                                    onClick={async () => {
-                                      const freq = prompt(`Sett opp fast time for ${b.customerName}?\n\nSkriv frekvens:\n- weekly (hver uke)\n- biweekly (annenhver uke)\n- monthly (hver måned)`)
-                                      if (!freq) return
-                                      const occ = prompt('Antall ganger? (standard: 8)') || '8'
-                                      const res = await fetch('/api/bookings/recurring', {
-                                        method: 'POST',
-                                        headers: { 'Content-Type': 'application/json' },
-                                        body: JSON.stringify({ booking_id: b.id, frequency: freq, occurrences: parseInt(occ) }),
-                                      }).then(r => r.json())
-                                      if (res.success) alert(`✅ ${res.created} faste timer opprettet! SMS sendt til kunden.`)
-                                      else alert('Noe gikk galt.')
-                                    }}
+                                    onClick={() =>
+                                      setRecurringModal({
+                                        bookingId: b.id,
+                                        customerName: b.customerName,
+                                      })
+                                    }
                                     className="mt-2 w-full rounded-lg border border-[#C8E6D8] bg-[#EFF8F4] py-1 text-xs font-semibold text-[#0F6E56] hover:bg-[#d1f0e4] transition-colors"
                                   >
                                     🔁 Gjenta time
@@ -1480,6 +1616,13 @@ export default function AdminPage() {
         salonName={salon?.name ?? ""}
         slug={salon?.slug ?? ""}
       />
+      {recurringModal && (
+        <RecurringModal
+          bookingId={recurringModal.bookingId}
+          customerName={recurringModal.customerName}
+          onClose={() => setRecurringModal(null)}
+        />
+      )}
     </main>
     </div>
   );
