@@ -1,4 +1,5 @@
 "use client";
+import { BarChart, Bar, XAxis, YAxis, Tooltip, ResponsiveContainer, CartesianGrid } from "recharts";
 
 import { useEffect, useMemo, useState } from "react";
 import { useRouter } from "next/navigation";
@@ -21,7 +22,7 @@ import {
 import { PAYMENT_OPTIONS } from "@/lib/payments/methods";
 import { FREE_TRIAL_MONTHS } from "@/lib/pricing/plans";
 
-type AdminTab = "calendar" | "services" | "staff" | "clients" | "invoices" | "settings" | "reviews";
+type AdminTab = "calendar" | "services" | "staff" | "clients" | "invoices" | "settings" | "reviews" | "statistikk";
 
 type Salon = Database["public"]["Tables"]["salons"]["Row"];
 type Service = Database["public"]["Tables"]["services"]["Row"];
@@ -209,6 +210,7 @@ const TABS: { id: AdminTab; label: string; icon: string }[] = [
   { id: "staff", label: no.admin.staff, icon: "👤" },
   { id: "clients", label: no.admin.clients, icon: "👥" },
   { id: "invoices", label: no.admin.invoices, icon: "🧾" },
+  { id: "statistikk", label: "Statistikk", icon: "📊" },
   { id: "reviews", label: "Anmeldelser", icon: "⭐" },
   { id: "settings", label: no.admin.settings, icon: "⚙️" },
 ];
@@ -800,12 +802,24 @@ export default function AdminPage() {
           >
             {salon.slug}.bookti.no ↗
           </a>
-          <button
-            onClick={() => setShowQr(true)}
-            className="flex items-center gap-1.5 rounded-xl border border-[#C8E6D8] bg-white px-3 py-2 text-sm font-semibold text-[#0F6E56] hover:bg-[#EFF8F4] transition-colors"
-          >
-            <span>📱 QR-kode</span>
-          </button>
+          <div className="flex items-center gap-2">
+            <button
+              onClick={() => setShowQr(true)}
+              className="flex items-center gap-1.5 rounded-xl border border-[#C8E6D8] bg-white px-3 py-2 text-sm font-semibold text-[#0F6E56] hover:bg-[#EFF8F4] transition-colors"
+            >
+              <span>📱 QR-kode</span>
+            </button>
+            <button
+              onClick={async () => {
+                const supabase = createClient()
+                await supabase.auth.signOut()
+                window.location.href = '/auth/login'
+              }}
+              className="flex items-center gap-1.5 rounded-xl border border-[#C8E6D8] bg-white px-3 py-2 text-sm font-semibold text-red-500 hover:bg-red-50 transition-colors"
+            >
+              <span>Logg ut</span>
+            </button>
+          </div>
         </header>
 
         <div className="p-8">
@@ -1002,6 +1016,26 @@ export default function AdminPage() {
                                   <span className="opacity-70">Ansatt: </span>
                                   {b.staffName}
                                 </div>
+                                {b.status === "kommende" && (
+                                  <button
+                                    onClick={async () => {
+                                      if (!confirm(`Marker ${b.customerName} som no-show?`)) return
+                                      await fetch('/api/bookings/no-show', {
+                                        method: 'POST',
+                                        headers: { 'Content-Type': 'application/json' },
+                                        body: JSON.stringify({ booking_id: b.id }),
+                                      })
+                                      .then(r => r.json())
+                                      .then(data => {
+                                        if (data.blocked) alert(`${b.customerName} er nå blokkert etter 2 no-shows.`)
+                                        else alert(`No-show registrert. ${data.no_show_count}/2 før blokkering.`)
+                                      })
+                                    }}
+                                    className="mt-2 w-full rounded-lg border border-red-200 bg-red-50 py-1 text-xs font-semibold text-red-500 hover:bg-red-100 transition-colors"
+                                  >
+                                    Ikke møtt opp
+                                  </button>
+                                )}
                               </div>
                             ))}
                           </div>
@@ -1209,6 +1243,10 @@ export default function AdminPage() {
                 )}
               </div>
             </>
+          )}
+
+          {tab === "statistikk" && (
+            <StatistikkTab salonId={salon?.id ?? ""} />
           )}
 
           {tab === "reviews" && (
@@ -1493,6 +1531,307 @@ function ReviewsTab({ salonId }: { salonId: string }) {
           ))}
         </div>
       )}
+    </div>
+  )
+}
+
+type TopServiceStat = { name: string; count: number };
+
+type StatsBookingRow = {
+  starts_at: string;
+  price_nok: number | null;
+  status: string;
+  no_show: boolean | null;
+  client_phone: string;
+  service_id: string | null;
+  services: { name: string } | { name: string }[] | null;
+};
+
+function StatistikkTab({ salonId }: { salonId: string }) {
+  const [monthlyData, setMonthlyData] = useState<any[]>([])
+  const [loading, setLoading] = useState(true)
+  const [totalRevenue, setTotalRevenue] = useState(0)
+  const [totalBookings, setTotalBookings] = useState(0)
+  const [avgBookingValue, setAvgBookingValue] = useState(0)
+  const [newClients, setNewClients] = useState(0)
+  const [returningClients, setReturningClients] = useState(0)
+  const [topServices, setTopServices] = useState<TopServiceStat[]>([])
+  const [noShowRate, setNoShowRate] = useState(0)
+  const [monthlyForecast, setMonthlyForecast] = useState(0)
+
+  useEffect(() => {
+    if (!salonId) return
+    const supabase = createClient()
+
+    async function load() {
+      const sixMonthsAgo = new Date()
+      sixMonthsAgo.setMonth(sixMonthsAgo.getMonth() - 6)
+
+      const [{ data: chartBookings }, { data: allBookings }] = await Promise.all([
+        supabase
+          .from('bookings')
+          .select('starts_at, price_nok, status')
+          .eq('salon_id', salonId)
+          .neq('status', 'cancelled')
+          .gte('starts_at', sixMonthsAgo.toISOString()),
+        supabase
+          .from('bookings')
+          .select('starts_at, price_nok, status, no_show, client_phone, service_id, services(name)')
+          .eq('salon_id', salonId),
+      ])
+
+      if (!chartBookings || !allBookings) { setLoading(false); return }
+
+      const statsBookings = allBookings as StatsBookingRow[]
+
+      const byMonth: Record<string, { revenue: number; count: number }> = {}
+      const MONTHS = ['Jan','Feb','Mar','Apr','Mai','Jun','Jul','Aug','Sep','Okt','Nov','Des']
+
+      chartBookings.forEach(b => {
+        const d = new Date(b.starts_at)
+        const key = `${MONTHS[d.getMonth()]} ${d.getFullYear()}`
+        if (!byMonth[key]) byMonth[key] = { revenue: 0, count: 0 }
+        byMonth[key].revenue += b.price_nok ?? 0
+        byMonth[key].count += 1
+      })
+
+      const chartData = Object.entries(byMonth).map(([month, data]) => ({
+        month,
+        inntekt: data.revenue,
+        avtaler: data.count,
+      }))
+
+      const total = chartBookings.reduce((s, b) => s + (b.price_nok ?? 0), 0)
+      setTotalRevenue(total)
+      setTotalBookings(chartBookings.length)
+      setAvgBookingValue(chartBookings.length > 0 ? Math.round(total / chartBookings.length) : 0)
+      setMonthlyData(chartData)
+
+      const visitBookings = statsBookings.filter(b => b.status !== 'cancelled')
+      const visitsByPhone = new Map<string, number>()
+      visitBookings.forEach(b => {
+        visitsByPhone.set(b.client_phone, (visitsByPhone.get(b.client_phone) ?? 0) + 1)
+      })
+      let nye = 0
+      let tilbakevendende = 0
+      visitsByPhone.forEach(count => {
+        if (count === 1) nye++
+        else if (count >= 2) tilbakevendende++
+      })
+      setNewClients(nye)
+      setReturningClients(tilbakevendende)
+
+      const serviceCounts = new Map<string, TopServiceStat>()
+      visitBookings.forEach(b => {
+        const svc = b.services
+        const name =
+          (Array.isArray(svc) ? svc[0]?.name : svc?.name) ?? 'Ukjent tjeneste'
+        const key = b.service_id ?? name
+        const existing = serviceCounts.get(key)
+        if (existing) existing.count++
+        else serviceCounts.set(key, { name, count: 1 })
+      })
+      setTopServices(
+        Array.from(serviceCounts.values())
+          .sort((a, b) => b.count - a.count)
+          .slice(0, 3),
+      )
+
+      const finished = statsBookings.filter(
+        b => b.status === 'completed' || b.no_show === true || b.status === 'no_show',
+      )
+      const noShows = finished.filter(b => b.no_show === true || b.status === 'no_show')
+      setNoShowRate(
+        finished.length > 0
+          ? Math.round((noShows.length / finished.length) * 1000) / 10
+          : 0,
+      )
+
+      const now = new Date()
+      const dayOfMonth = now.getDate()
+      const daysInMonth = new Date(now.getFullYear(), now.getMonth() + 1, 0).getDate()
+      const monthStart = new Date(now.getFullYear(), now.getMonth(), 1)
+      monthStart.setHours(0, 0, 0, 0)
+      const monthRevenue = statsBookings
+        .filter(b => {
+          const d = new Date(b.starts_at)
+          return d >= monthStart && d <= now && b.status !== 'cancelled'
+        })
+        .reduce((s, b) => s + (b.price_nok ?? 0), 0)
+      setMonthlyForecast(
+        dayOfMonth > 0 ? Math.round((monthRevenue / dayOfMonth) * daysInMonth) : 0,
+      )
+
+      setLoading(false)
+    }
+
+    load()
+  }, [salonId])
+
+  const [view, setView] = useState<'inntekt' | 'avtaler'>('inntekt')
+
+  if (loading) return <p className="text-sm text-[#4A6B5E]">Laster…</p>
+
+  const statCardClass = "rounded-xl border-l-4 border-l-[#0F6E56] bg-white p-4 shadow-sm"
+
+  return (
+    <div className="space-y-6">
+      <div className="grid grid-cols-2 gap-4 lg:grid-cols-4">
+        {[
+          { label: 'Total inntekt (6 mnd)', val: `${totalRevenue.toLocaleString('nb-NO')} kr` },
+          { label: 'Antall avtaler', val: String(totalBookings) },
+          { label: 'Snitt per avtale', val: `${avgBookingValue.toLocaleString('nb-NO')} kr` },
+          { label: 'Uteblivelsesrate', val: `${noShowRate} %` },
+          { label: 'Månedlig prognose', val: `${monthlyForecast.toLocaleString('nb-NO')} kr` },
+        ].map(({ label, val }) => (
+          <div key={label} className={statCardClass}>
+            <div className="text-xs text-[#7A9A8E]">{label}</div>
+            <div className="mt-1 text-xl font-black text-[#0F6E56]">{val}</div>
+          </div>
+        ))}
+
+        <div className={statCardClass}>
+          <div className="text-xs text-[#7A9A8E]">Nye vs. tilbakevendende</div>
+          <div className="mt-1 flex items-baseline gap-3">
+            <div>
+              <span className="text-xl font-black text-[#0F6E56]">{newClients}</span>
+              <span className="ml-1 text-xs text-[#7A9A8E]">nye</span>
+            </div>
+            <div>
+              <span className="text-xl font-black text-[#0F6E56]">{returningClients}</span>
+              <span className="ml-1 text-xs text-[#7A9A8E]">tilbakevendende</span>
+            </div>
+          </div>
+        </div>
+
+        <div className={`${statCardClass} col-span-2`}>
+          <div className="text-xs text-[#7A9A8E]">Mest populære tjenester</div>
+          {topServices.length === 0 ? (
+            <div className="mt-1 text-sm text-[#7A9A8E]">Ingen data ennå.</div>
+          ) : (
+            <ul className="mt-2 space-y-1">
+              {topServices.map((s, i) => (
+                <li key={s.name} className="flex items-center justify-between text-sm">
+                  <span className="font-semibold text-[#0F6E56]">
+                    {i + 1}. {s.name}
+                  </span>
+                  <span className="text-[#7A9A8E]">{s.count} besøk</span>
+                </li>
+              ))}
+            </ul>
+          )}
+        </div>
+      </div>
+
+      <div className="rounded-xl border border-[#C8E6D8] bg-white p-6 shadow-sm">
+        <div className="mb-4 flex items-center justify-between">
+          <h3 className="text-sm font-bold text-[#0F6E56]">
+            {view === 'inntekt' ? 'Inntekt per måned (NOK)' : 'Antall avtaler per måned'}
+          </h3>
+          <div className="flex rounded-lg border border-[#C8E6D8] overflow-hidden text-xs font-semibold">
+            <button
+              onClick={() => setView('inntekt')}
+              className={`px-3 py-1.5 transition-colors ${view === 'inntekt' ? 'bg-[#0F6E56] text-white' : 'text-[#7A9A8E] hover:bg-[#EFF8F4]'}`}
+            >
+              Inntekt
+            </button>
+            <button
+              onClick={() => setView('avtaler')}
+              className={`px-3 py-1.5 transition-colors ${view === 'avtaler' ? 'bg-[#0F6E56] text-white' : 'text-[#7A9A8E] hover:bg-[#EFF8F4]'}`}
+            >
+              Avtaler
+            </button>
+          </div>
+        </div>
+        {monthlyData.length === 0 ? (
+          <p className="text-sm text-[#7A9A8E]">Ingen data ennå.</p>
+        ) : (
+          <ResponsiveContainer width="100%" height={280}>
+            <BarChart data={monthlyData}>
+              <CartesianGrid strokeDasharray="3 3" stroke="#EFF8F4" />
+              <XAxis dataKey="month" tick={{ fontSize: 12, fill: '#7A9A8E' }} />
+              <YAxis tick={{ fontSize: 12, fill: '#7A9A8E' }} />
+              <Tooltip
+                formatter={(value: any) => [
+                  view === 'inntekt' ? `${Number(value).toLocaleString('nb-NO')} kr` : value,
+                  view === 'inntekt' ? 'Inntekt' : 'Avtaler'
+                ]}
+                contentStyle={{ borderRadius: '8px', border: '1px solid #C8E6D8' }}
+              />
+              <Bar
+                dataKey={view}
+                fill={view === 'inntekt' ? '#0F6E56' : '#5DCAA5'}
+                radius={[4, 4, 0, 0]}
+              />
+            </BarChart>
+          </ResponsiveContainer>
+        )}
+      </div>
+
+      <div className="grid gap-4 md:grid-cols-2">
+        <div className="rounded-xl border border-[#C8E6D8] bg-white p-6 shadow-sm">
+          <h3 className="text-sm font-bold text-[#0F6E56]">Nye vs. tilbakevendende kunder</h3>
+          <p className="mt-1 text-xs text-[#7A9A8E]">
+            Kunder med én besøk telles som nye, to eller flere som tilbakevendende.
+          </p>
+          <div className="mt-4 flex gap-6">
+            <div className={statCardClass + " flex-1"}>
+              <div className="text-xs text-[#7A9A8E]">Nye kunder</div>
+              <div className="mt-1 text-2xl font-black text-[#0F6E56]">{newClients}</div>
+            </div>
+            <div className={statCardClass + " flex-1"}>
+              <div className="text-xs text-[#7A9A8E]">Tilbakevendende kunder</div>
+              <div className="mt-1 text-2xl font-black text-[#0F6E56]">{returningClients}</div>
+            </div>
+          </div>
+        </div>
+
+        <div className="rounded-xl border border-[#C8E6D8] bg-white p-6 shadow-sm">
+          <h3 className="text-sm font-bold text-[#0F6E56]">Uteblivelsesrate</h3>
+          <p className="mt-1 text-xs text-[#7A9A8E]">
+            Andel avtaler merket som uteblivelse blant alle fullførte besøk.
+          </p>
+          <div className={`${statCardClass} mt-4`}>
+            <div className="text-xs text-[#7A9A8E]">No-show rate</div>
+            <div className="mt-1 text-2xl font-black text-[#0F6E56]">{noShowRate} %</div>
+          </div>
+        </div>
+
+        <div className="rounded-xl border border-[#C8E6D8] bg-white p-6 shadow-sm">
+          <h3 className="text-sm font-bold text-[#0F6E56]">Mest populære tjenester</h3>
+          <p className="mt-1 text-xs text-[#7A9A8E]">Topp 3 tjenester etter antall besøk.</p>
+          {topServices.length === 0 ? (
+            <p className="mt-4 text-sm text-[#7A9A8E]">Ingen data ennå.</p>
+          ) : (
+            <ul className="mt-4 space-y-3">
+              {topServices.map((s, i) => (
+                <li
+                  key={s.name}
+                  className={`${statCardClass} flex items-center justify-between`}
+                >
+                  <span className="font-semibold text-[#0F6E56]">
+                    {i + 1}. {s.name}
+                  </span>
+                  <span className="text-sm font-bold text-[#0F6E56]">{s.count} besøk</span>
+                </li>
+              ))}
+            </ul>
+          )}
+        </div>
+
+        <div className="rounded-xl border border-[#C8E6D8] bg-white p-6 shadow-sm">
+          <h3 className="text-sm font-bold text-[#0F6E56]">Månedlig prognose</h3>
+          <p className="mt-1 text-xs text-[#7A9A8E]">
+            Estimert inntekt for hele måneden basert på inntekt hittil i {NORWEGIAN_MONTHS[new Date().getMonth()]}.
+          </p>
+          <div className={`${statCardClass} mt-4`}>
+            <div className="text-xs text-[#7A9A8E]">Prognose (NOK)</div>
+            <div className="mt-1 text-2xl font-black text-[#0F6E56]">
+              {monthlyForecast.toLocaleString('nb-NO')} kr
+            </div>
+          </div>
+        </div>
+      </div>
     </div>
   )
 }
