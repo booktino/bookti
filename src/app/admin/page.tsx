@@ -1,7 +1,7 @@
 "use client";
 import { BarChart, Bar, XAxis, YAxis, Tooltip, ResponsiveContainer, CartesianGrid } from "recharts";
 
-import { useEffect, useMemo, useState } from "react";
+import { useEffect, useMemo, useRef, useState } from "react";
 import { useRouter } from "next/navigation";
 import { Logo } from "@/components/Logo";
 import { no } from "@/i18n/no";
@@ -23,7 +23,9 @@ import { PAYMENT_OPTIONS } from "@/lib/payments/methods";
 import { FREE_TRIAL_MONTHS } from "@/lib/pricing/plans";
 import {
   formatRecurringDateLabel,
+  hasConflict,
   type RecurringPreviewSlot,
+  type RecurringTimeSlotAvailability,
 } from "@/lib/bookings/recurring";
 
 type AdminTab = "calendar" | "services" | "staff" | "clients" | "invoices" | "settings" | "reviews" | "statistikk";
@@ -317,6 +319,204 @@ function getSlotStatusLabel(slot: RecurringModalSlot): string {
   return "✅ Ledig";
 }
 
+function HoverTooltip({ text }: { text: string }) {
+  return (
+    <span className="group relative ml-1 inline-flex">
+      <button
+        type="button"
+        className="flex h-4 w-4 items-center justify-center rounded-full border border-[#C8E6D8] bg-white text-[10px] font-bold text-[#0F6E56] hover:bg-[#EFF8F4]"
+        aria-label={text}
+      >
+        ?
+      </button>
+      <div className="pointer-events-none absolute bottom-full left-1/2 z-50 mb-1.5 hidden w-48 -translate-x-1/2 rounded-lg border border-[#C8E6D8] bg-white px-2.5 py-2 text-[10px] leading-snug text-[#4A6B5E] shadow-lg group-hover:block">
+        {text}
+      </div>
+    </span>
+  );
+}
+
+function slotConflictsWithPreview(
+  dateKey: string,
+  time: string,
+  durationMs: number,
+  slots: RecurringModalSlot[],
+  excludeIndex: number,
+): boolean {
+  const [year, month, day] = dateKey.split("-").map(Number);
+  const [hours, minutes] = time.split(":").map(Number);
+  const slotStart = new Date(year, month - 1, day, hours, minutes, 0, 0);
+  const slotEnd = new Date(slotStart.getTime() + durationMs);
+  const others = slots
+    .filter((_, i) => i !== excludeIndex)
+    .filter((s) => s.status === "available" || s.status === "rescheduled" || s.manuallyEdited)
+    .map((s) => ({ starts_at: s.starts_at, ends_at: s.ends_at }));
+  return hasConflict(slotStart, slotEnd, others);
+}
+
+function UnavailableSlotPicker({
+  bookingId,
+  slotIndex,
+  durationMs,
+  slots,
+  initialDate,
+  onSelect,
+  onClose,
+}: {
+  bookingId: string;
+  slotIndex: number;
+  durationMs: number;
+  slots: RecurringModalSlot[];
+  initialDate: string;
+  onSelect: (dateKey: string, time: string) => void;
+  onClose: () => void;
+}) {
+  const popupRef = useRef<HTMLDivElement>(null);
+  const [viewDate, setViewDate] = useState(() => {
+    const [y, m] = initialDate.split("-").map(Number);
+    return new Date(y, m - 1, 1);
+  });
+  const [selectedDate, setSelectedDate] = useState<string | null>(null);
+  const [timeSlots, setTimeSlots] = useState<RecurringTimeSlotAvailability[]>([]);
+  const [loadingTimes, setLoadingTimes] = useState(false);
+
+  const viewYear = viewDate.getFullYear();
+  const viewMonth = viewDate.getMonth();
+  const cells = useMemo(() => getCalendarCells(viewYear, viewMonth), [viewYear, viewMonth]);
+
+  useEffect(() => {
+    function handleClickOutside(e: MouseEvent) {
+      if (popupRef.current && !popupRef.current.contains(e.target as Node)) {
+        onClose();
+      }
+    }
+    document.addEventListener("mousedown", handleClickOutside);
+    return () => document.removeEventListener("mousedown", handleClickOutside);
+  }, [onClose]);
+
+  async function handleDaySelect(day: number) {
+    const key = dateKey(viewYear, viewMonth, day);
+    setSelectedDate(key);
+    setLoadingTimes(true);
+    try {
+      const params = new URLSearchParams({
+        booking_id: bookingId,
+        check_date: key,
+      });
+      const res = await fetch(`/api/bookings/recurring/preview?${params}`).then((r) =>
+        r.json(),
+      );
+      const apiSlots: RecurringTimeSlotAvailability[] = res.time_slots ?? [];
+      setTimeSlots(
+        apiSlots.map((slot) => ({
+          ...slot,
+          available:
+            slot.available &&
+            !slotConflictsWithPreview(key, slot.time, durationMs, slots, slotIndex),
+        })),
+      );
+    } catch {
+      setTimeSlots([]);
+    } finally {
+      setLoadingTimes(false);
+    }
+  }
+
+  return (
+    <div
+      ref={popupRef}
+      className="absolute top-full right-0 z-50 mt-1 w-64 rounded-2xl border border-[#C8E6D8] bg-white p-3 shadow-xl"
+      onClick={(e) => e.stopPropagation()}
+    >
+      <div className="mb-2 flex items-center justify-between">
+        <button
+          type="button"
+          onClick={() => setViewDate((d) => new Date(d.getFullYear(), d.getMonth() - 1, 1))}
+          className="flex h-7 w-7 items-center justify-center rounded-lg border border-[#C8E6D8] text-[#0F6E56] hover:bg-[#d1f0e4]"
+          aria-label="Forrige måned"
+        >
+          ←
+        </button>
+        <span className="text-xs font-bold capitalize text-[#0F6E56]">
+          {NORWEGIAN_MONTHS[viewMonth]} {viewYear}
+        </span>
+        <button
+          type="button"
+          onClick={() => setViewDate((d) => new Date(d.getFullYear(), d.getMonth() + 1, 1))}
+          className="flex h-7 w-7 items-center justify-center rounded-lg border border-[#C8E6D8] text-[#0F6E56] hover:bg-[#d1f0e4]"
+          aria-label="Neste måned"
+        >
+          →
+        </button>
+      </div>
+
+      <div className="mb-1 grid grid-cols-7 gap-0.5">
+        {WEEKDAYS.map((day) => (
+          <div
+            key={day}
+            className="py-1 text-center text-[9px] font-bold uppercase text-[#0F6E56]"
+          >
+            {day}
+          </div>
+        ))}
+      </div>
+
+      <div className="grid grid-cols-7 gap-0.5">
+        {cells.map((day, idx) => {
+          if (day === null) {
+            return <div key={`empty-${idx}`} className="aspect-square" />;
+          }
+          const key = dateKey(viewYear, viewMonth, day);
+          const isSelected = key === selectedDate;
+          return (
+            <button
+              key={key}
+              type="button"
+              onClick={() => handleDaySelect(day)}
+              className={`flex aspect-square items-center justify-center rounded-lg border text-[11px] font-bold transition-colors ${
+                isSelected
+                  ? "border-[#0F6E56] bg-[#0F6E56] text-white"
+                  : "border-[#C8E6D8]/60 bg-white/60 text-[#1a3d30] hover:bg-[#d1f0e4]"
+              }`}
+            >
+              {day}
+            </button>
+          );
+        })}
+      </div>
+
+      {selectedDate && (
+        <div className="mt-3 border-t border-[#C8E6D8] pt-3">
+          <p className="mb-2 text-[10px] font-bold text-[#0F6E56]">
+            Velg tid — {formatSelectedDayLabel(selectedDate)}
+          </p>
+          {loadingTimes ? (
+            <p className="py-2 text-center text-[10px] text-[#7A9A8E]">Laster…</p>
+          ) : (
+            <div className="grid max-h-36 grid-cols-3 gap-1 overflow-y-auto">
+              {timeSlots.map(({ time, available }) => (
+                <button
+                  key={time}
+                  type="button"
+                  disabled={!available}
+                  onClick={() => onSelect(selectedDate, time)}
+                  className={`rounded-lg px-1 py-1.5 text-[10px] font-semibold transition-colors ${
+                    available
+                      ? "bg-[#0F6E56] text-white hover:bg-[#0d5c48]"
+                      : "cursor-not-allowed bg-[#f0f0f0] text-[#9ca3af]"
+                  }`}
+                >
+                  {time}
+                </button>
+              ))}
+            </div>
+          )}
+        </div>
+      )}
+    </div>
+  );
+}
+
 function RecurringModal({
   bookingId,
   customerName,
@@ -338,6 +538,7 @@ function RecurringModal({
   const [editingIndex, setEditingIndex] = useState<number | null>(null);
   const [editDate, setEditDate] = useState("");
   const [editTime, setEditTime] = useState("");
+  const [pickerOpenIndex, setPickerOpenIndex] = useState<number | null>(null);
   const [loadingPreview, setLoadingPreview] = useState(false);
   const [submitting, setSubmitting] = useState(false);
   const [success, setSuccess] = useState<{ created: number } | null>(null);
@@ -375,6 +576,7 @@ function RecurringModal({
 
       setSlots(previewSlots);
       setEditingIndex(null);
+      setPickerOpenIndex(null);
       setStep("preview");
     } catch {
       setError("Noe gikk galt.");
@@ -427,6 +629,25 @@ function RecurringModal({
       }),
     );
     setEditingIndex(null);
+  }
+
+  function selectManualSlot(index: number, dateValue: string, timeValue: string) {
+    setSlots((prev) =>
+      prev.map((slot, i) => {
+        if (i !== index) return slot;
+        const newStart = applyDateAndTime(slot.starts_at, dateValue, timeValue);
+        const newEnd = new Date(new Date(newStart).getTime() + slot.durationMs).toISOString();
+        return {
+          ...slot,
+          starts_at: newStart,
+          ends_at: newEnd,
+          status: "available" as const,
+          rescheduled_to_time: null,
+          manuallyEdited: true,
+        };
+      }),
+    );
+    setPickerOpenIndex(null);
   }
 
   async function handleConfirm() {
@@ -492,7 +713,11 @@ function RecurringModal({
               {confirmableSlots.length} av {slots.length} timer kan opprettes
             </p>
 
-            <div className="mb-4 max-h-80 overflow-auto rounded-xl border border-[#C8E6D8]">
+            <div
+              className={`mb-4 max-h-80 rounded-xl border border-[#C8E6D8] ${
+                pickerOpenIndex !== null ? "overflow-visible" : "overflow-auto"
+              }`}
+            >
               <table className="w-full text-sm">
                 <thead className="sticky top-0 bg-[#f0faf6]">
                   <tr className="border-b border-[#C8E6D8] text-left text-xs text-[#0F6E56]">
@@ -506,7 +731,7 @@ function RecurringModal({
                   {slots.map((slot, index) => (
                     <tr
                       key={index}
-                      className={`border-b border-[#C8E6D8] last:border-0${
+                      className={`relative border-b border-[#C8E6D8] last:border-0${
                         isSlotUnavailable(slot) ? " opacity-50" : ""
                       }`}
                     >
@@ -542,18 +767,21 @@ function RecurringModal({
                       </td>
                       <td className="px-3 py-2 text-xs">
                         <span
-                          className={
+                          className={`inline-flex items-center ${
                             isSlotUnavailable(slot)
                               ? "text-[#dc2626]"
                               : slot.status === "rescheduled" && !slot.manuallyEdited
                                 ? "text-[#b45309]"
                                 : "text-[#0F6E56]"
-                          }
+                          }`}
                         >
                           {getSlotStatusLabel(slot)}
+                          {isSlotUnavailable(slot) && (
+                            <HoverTooltip text="Ingen ledig tid funnet automatisk. Klikk for å velge manuelt." />
+                          )}
                         </span>
                       </td>
-                      <td className="px-3 py-2 text-right">
+                      <td className="relative px-3 py-2 text-right">
                         {editingIndex === index ? (
                           <button
                             type="button"
@@ -561,6 +789,16 @@ function RecurringModal({
                             className="rounded-lg border border-[#0F6E56] px-2 py-1 text-xs font-semibold text-[#0F6E56] hover:bg-[#EFF8F4]"
                           >
                             Lagre
+                          </button>
+                        ) : isSlotUnavailable(slot) ? (
+                          <button
+                            type="button"
+                            onClick={() =>
+                              setPickerOpenIndex(pickerOpenIndex === index ? null : index)
+                            }
+                            className="rounded-lg border border-[#0F6E56] bg-[#EFF8F4] px-2 py-1 text-xs font-semibold text-[#0F6E56] hover:bg-[#d1f0e4]"
+                          >
+                            Velg dato
                           </button>
                         ) : (
                           <button
@@ -571,6 +809,17 @@ function RecurringModal({
                           >
                             ✏️
                           </button>
+                        )}
+                        {pickerOpenIndex === index && (
+                          <UnavailableSlotPicker
+                            bookingId={bookingId}
+                            slotIndex={index}
+                            durationMs={slot.durationMs}
+                            slots={slots}
+                            initialDate={toDateInputValue(slot.starts_at)}
+                            onSelect={(dateKey, time) => selectManualSlot(index, dateKey, time)}
+                            onClose={() => setPickerOpenIndex(null)}
+                          />
                         )}
                       </td>
                     </tr>
@@ -592,6 +841,7 @@ function RecurringModal({
                   setStep("configure");
                   setError(null);
                   setEditingIndex(null);
+                  setPickerOpenIndex(null);
                 }}
                 disabled={submitting}
                 className="flex-1 rounded-xl border border-[#C8E6D8] bg-[#EFF8F4] py-2.5 text-sm font-semibold text-[#4A6B5E] transition-colors hover:bg-[#C8E6D8] disabled:opacity-60"

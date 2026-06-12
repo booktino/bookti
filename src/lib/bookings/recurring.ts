@@ -243,3 +243,37 @@ export function getQueryWindow(planned: BookingTemplate[]) {
     queryMaxEnd: addDays(new Date(maxEnd), 1).toISOString(),
   };
 }
+
+export const RECURRING_SLOT_TIMES = (() => {
+  const options: string[] = [];
+  for (let hour = 8; hour <= 20; hour++) {
+    for (const minute of [0, 30]) {
+      if (hour === 20 && minute === 30) break;
+      options.push(
+        `${String(hour).padStart(2, "0")}:${String(minute).padStart(2, "0")}`,
+      );
+    }
+  }
+  return options;
+})();
+
+export type RecurringTimeSlotAvailability = {
+  time: string;
+  available: boolean;
+};
+
+export function getTimeSlotAvailability(
+  dateKey: string,
+  durationMs: number,
+  existingBookings: { starts_at: string; ends_at: string }[],
+): RecurringTimeSlotAvailability[] {
+  const [year, month, day] = dateKey.split("-").map(Number);
+
+  return RECURRING_SLOT_TIMES.map((time) => {
+    const [hours, minutes] = time.split(":").map(Number);
+    const slotStart = new Date(year, month - 1, day, hours, minutes, 0, 0);
+    const slotEnd = new Date(slotStart.getTime() + durationMs);
+    const available = !hasConflict(slotStart, slotEnd, existingBookings);
+    return { time, available };
+  });
+}

@@ -3,6 +3,7 @@ import { createClient } from "@supabase/supabase-js";
 import {
   buildPlannedRecurringBookings,
   getQueryWindow,
+  getTimeSlotAvailability,
   resolveRecurringSlots,
   type RecurringFrequency,
 } from "@/lib/bookings/recurring";
@@ -16,11 +17,53 @@ export async function GET(request: NextRequest) {
   try {
     const { searchParams } = new URL(request.url);
     const booking_id = searchParams.get("booking_id");
+    const check_date = searchParams.get("check_date");
     const frequency = searchParams.get("frequency") as RecurringFrequency | null;
     const occurrencesRaw = searchParams.get("occurrences");
     const start_time = searchParams.get("start_time");
 
-    if (!booking_id || !frequency || !start_time) {
+    if (!booking_id) {
+      return NextResponse.json({ error: "Mangler parametere" }, { status: 400 });
+    }
+
+    const { data: booking } = await supabase
+      .from("bookings")
+      .select("*")
+      .eq("id", booking_id)
+      .single();
+
+    if (!booking) {
+      return NextResponse.json({ error: "Booking ikke funnet" }, { status: 404 });
+    }
+
+    if (check_date) {
+      if (!/^\d{4}-\d{2}-\d{2}$/.test(check_date)) {
+        return NextResponse.json({ error: "Ugyldig dato" }, { status: 400 });
+      }
+
+      const durationMs =
+        new Date(booking.ends_at).getTime() - new Date(booking.starts_at).getTime();
+      const dayStart = new Date(`${check_date}T00:00:00`);
+      const dayEnd = new Date(`${check_date}T23:59:59.999`);
+
+      const { data: existingBookings } = await supabase
+        .from("bookings")
+        .select("starts_at, ends_at")
+        .eq("staff_id", booking.staff_id)
+        .neq("status", "cancelled")
+        .lt("starts_at", dayEnd.toISOString())
+        .gt("ends_at", dayStart.toISOString());
+
+      const time_slots = getTimeSlotAvailability(
+        check_date,
+        durationMs,
+        existingBookings ?? [],
+      );
+
+      return NextResponse.json({ time_slots });
+    }
+
+    if (!frequency || !start_time) {
       return NextResponse.json({ error: "Mangler parametere" }, { status: 400 });
     }
 
@@ -32,16 +75,6 @@ export async function GET(request: NextRequest) {
 
     if (!["weekly", "biweekly", "monthly"].includes(frequency)) {
       return NextResponse.json({ error: "Ugyldig frekvens" }, { status: 400 });
-    }
-
-    const { data: booking } = await supabase
-      .from("bookings")
-      .select("*")
-      .eq("id", booking_id)
-      .single();
-
-    if (!booking) {
-      return NextResponse.json({ error: "Booking ikke funnet" }, { status: 404 });
     }
 
     const planned = buildPlannedRecurringBookings(
