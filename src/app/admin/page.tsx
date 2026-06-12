@@ -21,6 +21,10 @@ import {
 } from "@/lib/cancellation";
 import { PAYMENT_OPTIONS } from "@/lib/payments/methods";
 import { FREE_TRIAL_MONTHS } from "@/lib/pricing/plans";
+import {
+  formatRecurringDateLabel,
+  type RecurringPreviewSlot,
+} from "@/lib/bookings/recurring";
 
 type AdminTab = "calendar" | "services" | "staff" | "clients" | "invoices" | "settings" | "reviews" | "statistikk";
 
@@ -275,6 +279,44 @@ function normalizeRecurringStartTime(time: string): string {
     : RECURRING_TIME_OPTIONS[0];
 }
 
+type RecurringModalSlot = RecurringPreviewSlot & {
+  durationMs: number;
+  manuallyEdited?: boolean;
+};
+
+function toDateInputValue(iso: string): string {
+  const d = new Date(iso);
+  return `${d.getFullYear()}-${String(d.getMonth() + 1).padStart(2, "0")}-${String(d.getDate()).padStart(2, "0")}`;
+}
+
+function toTimeInputValue(iso: string): string {
+  const d = new Date(iso);
+  return `${String(d.getHours()).padStart(2, "0")}:${String(d.getMinutes()).padStart(2, "0")}`;
+}
+
+function applyDateAndTime(iso: string, dateValue: string, timeValue: string): string {
+  const [year, month, day] = dateValue.split("-").map(Number);
+  const [hours, minutes] = timeValue.split(":").map(Number);
+  const d = new Date(iso);
+  d.setFullYear(year, month - 1, day);
+  d.setHours(hours, minutes, 0, 0);
+  return d.toISOString();
+}
+
+function isSlotUnavailable(slot: RecurringModalSlot): boolean {
+  return slot.status === "unavailable" && !slot.manuallyEdited;
+}
+
+function getSlotStatusLabel(slot: RecurringModalSlot): string {
+  if (isSlotUnavailable(slot)) {
+    return "❌ Ingen ledig tid";
+  }
+  if (slot.status === "rescheduled" && slot.rescheduled_to_time && !slot.manuallyEdited) {
+    return `🔄 Konflikt - flyttet til ${slot.rescheduled_to_time}`;
+  }
+  return "✅ Ledig";
+}
+
 function RecurringModal({
   bookingId,
   customerName,
@@ -286,42 +328,127 @@ function RecurringModal({
   defaultStartTime: string;
   onClose: () => void;
 }) {
+  const [step, setStep] = useState<"configure" | "preview">("configure");
   const [frequency, setFrequency] = useState<RecurringFrequency>("weekly");
   const [startTime, setStartTime] = useState(() =>
     normalizeRecurringStartTime(defaultStartTime),
   );
   const [occurrences, setOccurrences] = useState(8);
+  const [slots, setSlots] = useState<RecurringModalSlot[]>([]);
+  const [editingIndex, setEditingIndex] = useState<number | null>(null);
+  const [editDate, setEditDate] = useState("");
+  const [editTime, setEditTime] = useState("");
+  const [loadingPreview, setLoadingPreview] = useState(false);
   const [submitting, setSubmitting] = useState(false);
-  const [success, setSuccess] = useState<{
-    created: number;
-    rescheduled: { original: string; new: string }[];
-    skipped: string[];
-  } | null>(null);
+  const [success, setSuccess] = useState<{ created: number } | null>(null);
   const [error, setError] = useState<string | null>(null);
 
-  async function handleSubmit() {
+  const confirmableSlots = slots.filter(
+    (s) => s.status === "available" || s.status === "rescheduled",
+  );
+
+  async function handlePreview() {
+    setLoadingPreview(true);
+    setError(null);
+    try {
+      const params = new URLSearchParams({
+        booking_id: bookingId,
+        frequency,
+        occurrences: String(occurrences),
+        start_time: startTime,
+      });
+      const res = await fetch(`/api/bookings/recurring/preview?${params}`).then((r) =>
+        r.json(),
+      );
+
+      if (!res.slots) {
+        setError(res.error ?? "Noe gikk galt.");
+        return;
+      }
+
+      const previewSlots: RecurringModalSlot[] = (res.slots as RecurringPreviewSlot[]).map(
+        (slot) => ({
+          ...slot,
+          durationMs: new Date(slot.ends_at).getTime() - new Date(slot.starts_at).getTime(),
+        }),
+      );
+
+      setSlots(previewSlots);
+      setEditingIndex(null);
+      setStep("preview");
+    } catch {
+      setError("Noe gikk galt.");
+    } finally {
+      setLoadingPreview(false);
+    }
+  }
+
+  function updateSlotTime(index: number, timeValue: string) {
+    setSlots((prev) =>
+      prev.map((slot, i) => {
+        if (i !== index) return slot;
+        const dateValue = toDateInputValue(slot.starts_at);
+        const newStart = applyDateAndTime(slot.starts_at, dateValue, timeValue);
+        const newEnd = new Date(new Date(newStart).getTime() + slot.durationMs).toISOString();
+        return {
+          ...slot,
+          starts_at: newStart,
+          ends_at: newEnd,
+          status: "available" as const,
+          rescheduled_to_time: null,
+          manuallyEdited: true,
+        };
+      }),
+    );
+  }
+
+  function startEditing(index: number) {
+    const slot = slots[index];
+    setEditingIndex(index);
+    setEditDate(toDateInputValue(slot.starts_at));
+    setEditTime(toTimeInputValue(slot.starts_at));
+  }
+
+  function saveEditing() {
+    if (editingIndex === null) return;
+    setSlots((prev) =>
+      prev.map((slot, i) => {
+        if (i !== editingIndex) return slot;
+        const newStart = applyDateAndTime(slot.starts_at, editDate, editTime);
+        const newEnd = new Date(new Date(newStart).getTime() + slot.durationMs).toISOString();
+        return {
+          ...slot,
+          starts_at: newStart,
+          ends_at: newEnd,
+          status: "available" as const,
+          rescheduled_to_time: null,
+          manuallyEdited: true,
+        };
+      }),
+    );
+    setEditingIndex(null);
+  }
+
+  async function handleConfirm() {
+    if (confirmableSlots.length === 0) return;
+
     setSubmitting(true);
     setError(null);
     try {
-      const res = await fetch("/api/bookings/recurring", {
+      const res = await fetch("/api/bookings/recurring/confirm", {
         method: "POST",
         headers: { "Content-Type": "application/json" },
         body: JSON.stringify({
           booking_id: bookingId,
           frequency,
-          occurrences,
-          start_time: startTime,
+          slots: confirmableSlots.map(({ starts_at, ends_at }) => ({ starts_at, ends_at })),
         }),
       }).then((r) => r.json());
 
       if (res.success) {
-        setSuccess({
-          created: res.created,
-          rescheduled: res.rescheduled ?? [],
-          skipped: res.skipped ?? [],
-        });
+        setSuccess({ created: res.created });
       } else {
-        setError("Noe gikk galt.");
+        setError(res.error ?? "Noe gikk galt.");
       }
     } catch {
       setError("Noe gikk galt.");
@@ -336,42 +463,18 @@ function RecurringModal({
       onClick={onClose}
     >
       <div
-        className="w-full max-w-sm rounded-2xl bg-white p-6 shadow-2xl"
+        className={`w-full rounded-2xl bg-white p-6 shadow-2xl ${
+          step === "preview" ? "max-w-2xl" : "max-w-sm"
+        }`}
         onClick={(e) => e.stopPropagation()}
       >
         {success ? (
           <div className="flex flex-col gap-3">
-            <div className="rounded-xl border border-green-200 bg-green-50 p-4">
-              <p className="text-sm font-semibold text-green-800">
+            <div className="rounded-xl border border-[#C8E6D8] bg-[#EFF8F4] p-4">
+              <p className="text-sm font-semibold text-[#0F6E56]">
                 ✅ {success.created} faste timer opprettet!
               </p>
             </div>
-            {success.rescheduled.length > 0 && (
-              <div className="rounded-xl border border-yellow-200 bg-yellow-50 p-4">
-                <p className="text-sm font-semibold text-yellow-800">🔄 Flyttede timer:</p>
-                <ul className="mt-2 space-y-1">
-                  {success.rescheduled.map((r, i) => (
-                    <li key={i} className="text-sm text-yellow-800">
-                      {r.original} → {r.new}
-                    </li>
-                  ))}
-                </ul>
-              </div>
-            )}
-            {success.skipped.length > 0 && (
-              <div className="rounded-xl border border-red-200 bg-red-50 p-4">
-                <p className="text-sm font-semibold text-red-800">
-                  ⚠️ Ikke funnet ledig tid for:
-                </p>
-                <ul className="mt-2 space-y-1">
-                  {success.skipped.map((s, i) => (
-                    <li key={i} className="text-sm text-red-800">
-                      {s}
-                    </li>
-                  ))}
-                </ul>
-              </div>
-            )}
             <button
               type="button"
               onClick={onClose}
@@ -380,6 +483,133 @@ function RecurringModal({
               Lukk
             </button>
           </div>
+        ) : step === "preview" ? (
+          <>
+            <h2 className="mb-1 text-lg font-bold text-[#0F6E56]">
+              Bekreft faste timer for {customerName}
+            </h2>
+            <p className="mb-4 text-xs text-[#7A9A8E]">
+              {confirmableSlots.length} av {slots.length} timer kan opprettes
+            </p>
+
+            <div className="mb-4 max-h-80 overflow-auto rounded-xl border border-[#C8E6D8]">
+              <table className="w-full text-sm">
+                <thead className="sticky top-0 bg-[#f0faf6]">
+                  <tr className="border-b border-[#C8E6D8] text-left text-xs text-[#0F6E56]">
+                    <th className="px-3 py-2 font-bold">Dato</th>
+                    <th className="px-3 py-2 font-bold">Tid</th>
+                    <th className="px-3 py-2 font-bold">Status</th>
+                    <th className="px-3 py-2 font-bold" />
+                  </tr>
+                </thead>
+                <tbody>
+                  {slots.map((slot, index) => (
+                    <tr
+                      key={index}
+                      className={`border-b border-[#C8E6D8] last:border-0${
+                        isSlotUnavailable(slot) ? " opacity-50" : ""
+                      }`}
+                    >
+                      <td className="px-3 py-2 text-[#1a3d30]">
+                        {editingIndex === index ? (
+                          <input
+                            type="date"
+                            value={editDate}
+                            onChange={(e) => setEditDate(e.target.value)}
+                            className="w-full rounded-lg border border-[#C8E6D8] px-2 py-1 text-xs outline-none focus:border-[#0F6E56]"
+                          />
+                        ) : (
+                          formatRecurringDateLabel(new Date(slot.starts_at))
+                        )}
+                      </td>
+                      <td className="px-3 py-2">
+                        {editingIndex === index ? (
+                          <input
+                            type="time"
+                            value={editTime}
+                            onChange={(e) => setEditTime(e.target.value)}
+                            className="w-full rounded-lg border border-[#C8E6D8] px-2 py-1 text-xs outline-none focus:border-[#0F6E56]"
+                          />
+                        ) : (
+                          <input
+                            type="time"
+                            value={toTimeInputValue(slot.starts_at)}
+                            onChange={(e) => updateSlotTime(index, e.target.value)}
+                            disabled={isSlotUnavailable(slot)}
+                            className="rounded-lg border border-[#C8E6D8] px-2 py-1 text-xs outline-none focus:border-[#0F6E56] disabled:cursor-not-allowed disabled:opacity-60"
+                          />
+                        )}
+                      </td>
+                      <td className="px-3 py-2 text-xs">
+                        <span
+                          className={
+                            isSlotUnavailable(slot)
+                              ? "text-[#dc2626]"
+                              : slot.status === "rescheduled" && !slot.manuallyEdited
+                                ? "text-[#b45309]"
+                                : "text-[#0F6E56]"
+                          }
+                        >
+                          {getSlotStatusLabel(slot)}
+                        </span>
+                      </td>
+                      <td className="px-3 py-2 text-right">
+                        {editingIndex === index ? (
+                          <button
+                            type="button"
+                            onClick={saveEditing}
+                            className="rounded-lg border border-[#0F6E56] px-2 py-1 text-xs font-semibold text-[#0F6E56] hover:bg-[#EFF8F4]"
+                          >
+                            Lagre
+                          </button>
+                        ) : (
+                          <button
+                            type="button"
+                            onClick={() => startEditing(index)}
+                            className="rounded-lg border border-[#C8E6D8] px-2 py-1 text-xs hover:bg-[#EFF8F4]"
+                            title="Endre dato og tid"
+                          >
+                            ✏️
+                          </button>
+                        )}
+                      </td>
+                    </tr>
+                  ))}
+                </tbody>
+              </table>
+            </div>
+
+            {error && (
+              <p className="mb-4 rounded-lg border border-[#fee2e2] bg-[#fee2e2]/40 px-3 py-2 text-center text-sm font-semibold text-[#dc2626]">
+                {error}
+              </p>
+            )}
+
+            <div className="flex gap-3">
+              <button
+                type="button"
+                onClick={() => {
+                  setStep("configure");
+                  setError(null);
+                  setEditingIndex(null);
+                }}
+                disabled={submitting}
+                className="flex-1 rounded-xl border border-[#C8E6D8] bg-[#EFF8F4] py-2.5 text-sm font-semibold text-[#4A6B5E] transition-colors hover:bg-[#C8E6D8] disabled:opacity-60"
+              >
+                Avbryt
+              </button>
+              <button
+                type="button"
+                onClick={handleConfirm}
+                disabled={submitting || confirmableSlots.length === 0}
+                className="flex-1 rounded-xl bg-[#0F6E56] py-2.5 text-sm font-bold text-white transition-colors hover:bg-[#0d5c48] disabled:opacity-60"
+              >
+                {submitting
+                  ? "Oppretter…"
+                  : `Bekreft og opprett ${confirmableSlots.length} timer`}
+              </button>
+            </div>
+          </>
         ) : (
           <>
             <h2 className="mb-5 text-lg font-bold text-[#0F6E56]">
@@ -443,18 +673,18 @@ function RecurringModal({
               <button
                 type="button"
                 onClick={onClose}
-                disabled={submitting}
+                disabled={loadingPreview}
                 className="flex-1 rounded-xl border border-[#C8E6D8] bg-[#EFF8F4] py-2.5 text-sm font-semibold text-[#4A6B5E] transition-colors hover:bg-[#C8E6D8] disabled:opacity-60"
               >
                 Avbryt
               </button>
               <button
                 type="button"
-                onClick={handleSubmit}
-                disabled={submitting}
+                onClick={handlePreview}
+                disabled={loadingPreview}
                 className="flex-1 rounded-xl bg-[#0F6E56] py-2.5 text-sm font-bold text-white transition-colors hover:bg-[#0d5c48] disabled:opacity-60"
               >
-                {submitting ? "Oppretter…" : "Opprett"}
+                {loadingPreview ? "Laster…" : "Vis forslag"}
               </button>
             </div>
           </>
