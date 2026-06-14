@@ -943,6 +943,7 @@ export default function AdminPage() {
   const [notifVisible, setNotifVisible] = useState(true);
   const [currentCalendarDate, setCurrentCalendarDate] = useState(() => new Date());
   const [selectedDay, setSelectedDay] = useState<string | null>(null);
+  const [selectedStaffFilter, setSelectedStaffFilter] = useState<string>("all");
   const [loading, setLoading] = useState(true);
   const [salon, setSalon] = useState<Salon | null>(null);
   const [bookings, setBookings] = useState<BookingRow[]>([]);
@@ -1074,11 +1075,14 @@ export default function AdminPage() {
     const { monthStart, monthEnd } = getMonthBounds(currentCalendarDate);
     return bookings
       .filter((b) => {
+        if (selectedStaffFilter !== "all" && b.staff_id !== selectedStaffFilter) {
+          return false;
+        }
         const start = new Date(b.starts_at);
         return start >= monthStart && start <= monthEnd;
       })
       .map(bookingToCalendar);
-  }, [bookings, currentCalendarDate]);
+  }, [bookings, currentCalendarDate, selectedStaffFilter]);
 
   const todayBookings = useMemo(
     () =>
@@ -1582,6 +1586,34 @@ export default function AdminPage() {
 
               <div className="relative flex flex-col gap-4 lg:flex-row lg:items-start">
                 <div className="min-w-0 flex-1 rounded-xl border border-[#C8E6D8] bg-white p-4 shadow-sm sm:p-6">
+                  <div className="mb-4 flex flex-wrap gap-2">
+                    <button
+                      type="button"
+                      onClick={() => setSelectedStaffFilter("all")}
+                      className={`rounded-lg px-3 py-1.5 text-xs font-bold transition-colors ${
+                        selectedStaffFilter === "all"
+                          ? "bg-[#0F6E56] text-white"
+                          : "border border-[#C8E6D8] bg-white text-[#0F6E56] hover:bg-[#EFF8F4]"
+                      }`}
+                    >
+                      Alle
+                    </button>
+                    {staffList.map((member) => (
+                      <button
+                        key={member.id}
+                        type="button"
+                        onClick={() => setSelectedStaffFilter(member.id)}
+                        className={`rounded-lg px-3 py-1.5 text-xs font-bold transition-colors ${
+                          selectedStaffFilter === member.id
+                            ? "bg-[#0F6E56] text-white"
+                            : "border border-[#C8E6D8] bg-white text-[#0F6E56] hover:bg-[#EFF8F4]"
+                        }`}
+                      >
+                        {member.name}
+                      </button>
+                    ))}
+                  </div>
+
                   <div className="mb-4 flex flex-wrap items-center justify-between gap-3">
                     <div className="flex items-center gap-2">
                       <button
