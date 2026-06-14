@@ -106,6 +106,7 @@ export interface Database {
           sms_reminder_sent: boolean
           cancellation_reason: string | null
           refund_status: 'full' | 'partial' | 'none' | 'pending' | null
+          source: string
           created_at: string
           updated_at: string
         }
@@ -140,6 +141,16 @@ export interface Database {
         }
         Insert: Omit<Database['public']['Tables']['sms_logs']['Row'], 'id' | 'created_at'>
         Update: Partial<Database['public']['Tables']['sms_logs']['Insert']>
+      }
+      invoices: {
+        Row: {
+          id: string
+          booking_id: string
+          invoice_number: string
+          created_at: string
+        }
+        Insert: Omit<Database['public']['Tables']['invoices']['Row'], 'id' | 'created_at'>
+        Update: Partial<Database['public']['Tables']['invoices']['Insert']>
       }
     }
   }

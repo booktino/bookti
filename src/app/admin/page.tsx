@@ -986,6 +986,39 @@ export default function AdminPage() {
     customerName: string;
     defaultStartTime: string;
   } | null>(null);
+  const [downloadingInvoiceId, setDownloadingInvoiceId] = useState<string | null>(null);
+
+  async function downloadInvoice(bookingId: string) {
+    setDownloadingInvoiceId(bookingId);
+    try {
+      const res = await fetch("/api/invoices/generate", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ booking_id: bookingId }),
+      });
+
+      if (!res.ok) {
+        const data = (await res.json().catch(() => null)) as { error?: string } | null;
+        throw new Error(data?.error ?? "Kunne ikke generere faktura");
+      }
+
+      const invoiceNumber =
+        res.headers.get("X-Invoice-Number") ?? bookingId.slice(0, 8);
+      const blob = await res.blob();
+      const url = URL.createObjectURL(blob);
+      const link = document.createElement("a");
+      link.href = url;
+      link.download = `Faktura-${invoiceNumber}.pdf`;
+      document.body.appendChild(link);
+      link.click();
+      link.remove();
+      URL.revokeObjectURL(url);
+    } catch (err) {
+      alert(err instanceof Error ? err.message : no.common.error);
+    } finally {
+      setDownloadingInvoiceId(null);
+    }
+  }
 
   useEffect(() => {
     const id = setInterval(() => setNotifVisible((v) => !v), 2800);
@@ -2000,6 +2033,14 @@ export default function AdminPage() {
                       <span className="rounded-full bg-[#0F6E56]/10 px-2.5 py-0.5 text-[10px] font-bold text-[#0F6E56]">
                         betalt
                       </span>
+                      <button
+                        type="button"
+                        onClick={() => downloadInvoice(inv.id)}
+                        disabled={downloadingInvoiceId === inv.id}
+                        className="rounded-lg border border-[#0F6E56] px-3 py-1.5 text-xs font-bold text-[#0F6E56] transition hover:bg-[#0F6E56]/5 disabled:opacity-50"
+                      >
+                        {downloadingInvoiceId === inv.id ? no.common.loading : "📄 Last ned faktura"}
+                      </button>
                     </div>
                   ))}
                 {bookings.filter((b) => b.status === "completed").length === 0 && (
