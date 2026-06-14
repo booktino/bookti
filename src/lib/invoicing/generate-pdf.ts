@@ -1,4 +1,5 @@
 import { PDFDocument, rgb, StandardFonts, type PDFImage } from "pdf-lib";
+import { formatOrgNumber } from "@/lib/norway/business-fields";
 
 const BRAND = rgb(15 / 255, 110 / 255, 86 / 255);
 const TEXT = rgb(0.15, 0.15, 0.15);
@@ -19,8 +20,17 @@ const NORWEGIAN_MONTHS = [
   "desember",
 ];
 
+export type InvoiceSenderInfo = {
+  businessName: string;
+  orgNumber?: string | null;
+  address?: string | null;
+  postalCode?: string | null;
+  city?: string | null;
+};
+
 export type InvoicePdfData = {
   salonName: string;
+  sender: InvoiceSenderInfo;
   logoBytes?: Uint8Array | null;
   logoMime?: "png" | "jpg" | null;
   invoiceNumber: string;
@@ -115,7 +125,59 @@ export async function generateInvoicePdf(data: InvoicePdfData): Promise<Uint8Arr
     color: TEXT,
   });
 
-  y -= 36;
+  y -= 32;
+  page.drawText("Fra:", {
+    x: margin,
+    y,
+    size: 11,
+    font: fontBold,
+    color: BRAND,
+  });
+
+  y -= 16;
+  page.drawText(data.sender.businessName, {
+    x: margin,
+    y,
+    size: 10,
+    font: fontBold,
+    color: TEXT,
+  });
+
+  if (data.sender.orgNumber) {
+    y -= 14;
+    page.drawText(`Org.nr: ${formatOrgNumber(data.sender.orgNumber)}`, {
+      x: margin,
+      y,
+      size: 10,
+      font: fontRegular,
+      color: TEXT,
+    });
+  }
+
+  if (data.sender.address) {
+    y -= 14;
+    page.drawText(data.sender.address, {
+      x: margin,
+      y,
+      size: 10,
+      font: fontRegular,
+      color: TEXT,
+    });
+  }
+
+  const cityLine = [data.sender.postalCode, data.sender.city].filter(Boolean).join(" ");
+  if (cityLine) {
+    y -= 14;
+    page.drawText(cityLine, {
+      x: margin,
+      y,
+      size: 10,
+      font: fontRegular,
+      color: TEXT,
+    });
+  }
+
+  y -= 28;
   page.drawText("Kunde", {
     x: margin,
     y,

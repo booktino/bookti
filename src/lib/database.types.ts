@@ -27,6 +27,9 @@ export interface Database {
           email: string | null
           address: string | null
           city: string
+          business_name: string | null
+          org_number: string | null
+          postal_code: string | null
           country: string
           logo_url: string | null
           cover_url: string | null

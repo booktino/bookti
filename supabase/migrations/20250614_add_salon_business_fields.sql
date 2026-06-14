@@ -1,0 +1,4 @@
+ALTER TABLE salons
+  ADD COLUMN IF NOT EXISTS business_name TEXT,
+  ADD COLUMN IF NOT EXISTS org_number TEXT,
+  ADD COLUMN IF NOT EXISTS postal_code TEXT;

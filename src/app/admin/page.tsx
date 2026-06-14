@@ -20,6 +20,12 @@ import {
   type CancellationFeeType,
 } from "@/lib/cancellation";
 import { PAYMENT_OPTIONS } from "@/lib/payments/methods";
+import {
+  isValidOrgNumber,
+  isValidPostalCode,
+  normalizeOrgNumber,
+  normalizePostalCode,
+} from "@/lib/norway/business-fields";
 import { FREE_TRIAL_MONTHS } from "@/lib/pricing/plans";
 import { SLOT_INTERVAL_MIN } from "@/lib/availability";
 import {
@@ -980,6 +986,12 @@ export default function AdminPage() {
   const [cancellationFeeAmount, setCancellationFeeAmount] = useState("");
   const [settingsSaving, setSettingsSaving] = useState(false);
   const [settingsSaved, setSettingsSaved] = useState(false);
+  const [settingsError, setSettingsError] = useState<string | null>(null);
+  const [businessName, setBusinessName] = useState("");
+  const [orgNumber, setOrgNumber] = useState("");
+  const [businessAddress, setBusinessAddress] = useState("");
+  const [postalCode, setPostalCode] = useState("");
+  const [businessCity, setBusinessCity] = useState("");
   const [recurringModal, setRecurringModal] = useState<{
     bookingId: string;
     staffId: string;
@@ -1088,6 +1100,11 @@ export default function AdminPage() {
           ? String(salonData.cancellation_fee_amount)
           : "",
       );
+      setBusinessName(salonData.business_name ?? "");
+      setOrgNumber(salonData.org_number ?? "");
+      setBusinessAddress(salonData.address ?? "");
+      setPostalCode(salonData.postal_code ?? "");
+      setBusinessCity(salonData.city ?? "");
       setBookings((bookingsRes.data as BookingRow[] | null) ?? []);
       setServices(servicesRes.data ?? []);
       setStaffList(staffRows);
@@ -1309,6 +1326,23 @@ export default function AdminPage() {
 
     setSettingsSaving(true);
     setSettingsSaved(false);
+    setSettingsError(null);
+
+    const normalizedOrg = normalizeOrgNumber(orgNumber);
+    const normalizedPostal = normalizePostalCode(postalCode);
+
+    if (!isValidOrgNumber(orgNumber)) {
+      setSettingsError("Organisasjonsnummer må være 9 siffer.");
+      setSettingsSaving(false);
+      return;
+    }
+
+    if (!isValidPostalCode(postalCode)) {
+      setSettingsError("Postnummer må være 4 siffer.");
+      setSettingsSaving(false);
+      return;
+    }
+
     const supabase = createClient();
 
     const feeAmount =
@@ -1319,6 +1353,11 @@ export default function AdminPage() {
     const { data, error } = await supabase
       .from("salons")
       .update({
+        business_name: businessName.trim() || null,
+        org_number: normalizedOrg || null,
+        address: businessAddress.trim() || null,
+        postal_code: normalizedPostal || null,
+        city: businessCity.trim() || salon.city,
         cancellation_allowed: cancellationAllowed,
         cancellation_hours: cancellationHours,
         cancellation_reason_required: cancellationReasonRequired,
@@ -1331,8 +1370,15 @@ export default function AdminPage() {
       .select()
       .single();
 
-    if (!error && data) {
+    if (error) {
+      setSettingsError(error.message);
+    } else if (data) {
       setSalon(data);
+      setBusinessName(data.business_name ?? "");
+      setOrgNumber(data.org_number ?? "");
+      setBusinessAddress(data.address ?? "");
+      setPostalCode(data.postal_code ?? "");
+      setBusinessCity(data.city ?? "");
       setSettingsSaved(true);
     }
 
@@ -2063,25 +2109,78 @@ export default function AdminPage() {
           {tab === "settings" && (
             <div className="max-w-lg space-y-6">
               <section className="rounded-xl border border-[#C8E6D8] bg-white p-5 shadow-sm">
-                <h3 className="mb-4 text-sm font-bold text-[#0F6E56]">{no.admin.businessSettings}</h3>
-                {[
-                  { label: "Bedriftsnavn", value: salon.name },
-                  { label: "E-post", value: salon.email ?? "—" },
-                  { label: "Telefon", value: salon.phone ?? "—" },
-                  {
-                    label: "Adresse",
-                    value: [salon.address, salon.city].filter(Boolean).join(", ") || "—",
-                  },
-                ].map(({ label, value }) => (
-                  <div key={label} className="mb-3">
-                    <label className="text-xs font-bold text-[#7A9A8E]">{label}</label>
+                <h3 className="mb-1 text-sm font-bold text-[#0F6E56]">Bedriftsinformasjon</h3>
+                <p className="mb-4 text-xs text-[#7A9A8E]">
+                  Brukes på fakturaer. Tomt firmanavn bruker salongnavnet ({salon.name}).
+                </p>
+                <div className="space-y-3">
+                  <label className="block">
+                    <span className="text-xs font-bold text-[#7A9A8E]">Firmanavn</span>
                     <input
-                      readOnly
-                      value={value}
-                      className="mt-1 w-full rounded-lg border border-[#C8E6D8] bg-[#f0faf6] px-3 py-2 text-sm"
+                      type="text"
+                      value={businessName}
+                      onChange={(e) => setBusinessName(e.target.value)}
+                      placeholder={salon.name}
+                      className={inputClass}
                     />
+                  </label>
+                  <label className="block">
+                    <span className="text-xs font-bold text-[#7A9A8E]">Organisasjonsnummer</span>
+                    <input
+                      type="text"
+                      inputMode="numeric"
+                      value={orgNumber}
+                      onChange={(e) => setOrgNumber(normalizeOrgNumber(e.target.value))}
+                      placeholder="123456789"
+                      maxLength={9}
+                      className={inputClass}
+                    />
+                  </label>
+                  <label className="block">
+                    <span className="text-xs font-bold text-[#7A9A8E]">Adresse</span>
+                    <input
+                      type="text"
+                      value={businessAddress}
+                      onChange={(e) => setBusinessAddress(e.target.value)}
+                      placeholder="Gateadresse 1"
+                      className={inputClass}
+                    />
+                  </label>
+                  <div className="grid grid-cols-2 gap-3">
+                    <label className="block">
+                      <span className="text-xs font-bold text-[#7A9A8E]">Postnummer</span>
+                      <input
+                        type="text"
+                        inputMode="numeric"
+                        value={postalCode}
+                        onChange={(e) => setPostalCode(normalizePostalCode(e.target.value))}
+                        placeholder="5003"
+                        maxLength={4}
+                        className={inputClass}
+                      />
+                    </label>
+                    <label className="block">
+                      <span className="text-xs font-bold text-[#7A9A8E]">By</span>
+                      <input
+                        type="text"
+                        value={businessCity}
+                        onChange={(e) => setBusinessCity(e.target.value)}
+                        placeholder="Bergen"
+                        className={inputClass}
+                      />
+                    </label>
                   </div>
-                ))}
+                  <div className="grid grid-cols-2 gap-3 border-t border-[#C8E6D8] pt-3">
+                    <div>
+                      <span className="text-xs font-bold text-[#7A9A8E]">E-post</span>
+                      <p className="mt-1 text-sm text-[#4A6B5E]">{salon.email ?? "—"}</p>
+                    </div>
+                    <div>
+                      <span className="text-xs font-bold text-[#7A9A8E]">Telefon</span>
+                      <p className="mt-1 text-sm text-[#4A6B5E]">{salon.phone ?? "—"}</p>
+                    </div>
+                  </div>
+                </div>
               </section>
 
               <section className="rounded-xl border border-[#C8E6D8] bg-white p-5 shadow-sm">
@@ -2246,17 +2345,22 @@ export default function AdminPage() {
                 ))}
               </section>
 
-              <div className="flex items-center gap-4">
-                <button
-                  type="button"
-                  onClick={saveCancellationSettings}
-                  disabled={settingsSaving}
-                  className="btn-primary rounded-xl px-6 py-3 text-sm font-bold text-white disabled:opacity-60"
-                >
-                  {settingsSaving ? no.common.loading : no.admin.save}
-                </button>
-                {settingsSaved && (
-                  <span className="text-sm font-semibold text-[#0F6E56]">Lagret!</span>
+              <div className="flex flex-col gap-2">
+                <div className="flex items-center gap-4">
+                  <button
+                    type="button"
+                    onClick={saveCancellationSettings}
+                    disabled={settingsSaving}
+                    className="btn-primary rounded-xl px-6 py-3 text-sm font-bold text-white disabled:opacity-60"
+                  >
+                    {settingsSaving ? no.common.loading : no.admin.save}
+                  </button>
+                  {settingsSaved && (
+                    <span className="text-sm font-semibold text-[#0F6E56]">Lagret!</span>
+                  )}
+                </div>
+                {settingsError && (
+                  <p className="text-sm font-semibold text-red-600">{settingsError}</p>
                 )}
               </div>
             </div>

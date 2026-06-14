@@ -6,6 +6,12 @@ import { Logo } from "@/components/Logo";
 import { StepIndicator } from "@/components/StepIndicator";
 import type { Database } from "@/lib/database.types";
 import { COUNTRY, CURRENCY, TIMEZONE } from "@/lib/norway/constants";
+import {
+  isValidOrgNumber,
+  isValidPostalCode,
+  normalizeOrgNumber,
+  normalizePostalCode,
+} from "@/lib/norway/business-fields";
 import { FREE_TRIAL_MONTHS } from "@/lib/pricing/plans";
 import { createClient } from "@/lib/supabase";
 
@@ -60,9 +66,12 @@ type SupabaseClient = ReturnType<typeof createClient>;
 
 type SalonFormData = {
   businessName: string;
+  invoiceBusinessName: string;
+  orgNumber: string;
   email: string;
   phone: string;
   address: string;
+  postalCode: string;
   city: string;
 };
 
@@ -78,6 +87,9 @@ async function createSalon(
     phone: form.phone.trim(),
     address: form.address.trim(),
     city: form.city.trim() || "Bergen",
+    business_name: form.invoiceBusinessName.trim() || null,
+    org_number: normalizeOrgNumber(form.orgNumber) || null,
+    postal_code: normalizePostalCode(form.postalCode) || null,
     email: form.email.trim(),
     description: null,
     logo_url: null,
@@ -122,9 +134,12 @@ export default function RegisterPage() {
   const [password, setPassword] = useState("");
 
   const [businessName, setBusinessName] = useState("");
+  const [invoiceBusinessName, setInvoiceBusinessName] = useState("");
+  const [orgNumber, setOrgNumber] = useState("");
   const [businessType, setBusinessType] = useState<string>(BUSINESS_TYPES[0]);
   const [phone, setPhone] = useState("");
   const [address, setAddress] = useState("");
+  const [postalCode, setPostalCode] = useState("");
   const [city, setCity] = useState("Bergen");
 
   function handleStep1(e: React.FormEvent) {
@@ -143,6 +158,18 @@ export default function RegisterPage() {
     e.preventDefault();
     setLoading(true);
     setError(null);
+
+    if (!isValidOrgNumber(orgNumber)) {
+      setError("Organisasjonsnummer må være 9 siffer.");
+      setLoading(false);
+      return;
+    }
+
+    if (!isValidPostalCode(postalCode)) {
+      setError("Postnummer må være 4 siffer.");
+      setLoading(false);
+      return;
+    }
 
     const supabase = createClient();
 
@@ -198,9 +225,12 @@ export default function RegisterPage() {
 
     const { error: salonError } = await createSalon(supabase, userId, {
       businessName,
+      invoiceBusinessName,
+      orgNumber,
       email,
       phone,
       address,
+      postalCode,
       city,
     });
 
@@ -339,6 +369,44 @@ export default function RegisterPage() {
 
               <div>
                 <label
+                  htmlFor="invoiceBusinessName"
+                  className="mb-1.5 block text-sm font-semibold"
+                >
+                  Firmanavn for faktura{" "}
+                  <span className="font-normal text-[#7A9A8E]">(valgfritt)</span>
+                </label>
+                <input
+                  id="invoiceBusinessName"
+                  type="text"
+                  value={invoiceBusinessName}
+                  onChange={(e) => setInvoiceBusinessName(e.target.value)}
+                  placeholder="Samme som bedriftsnavn hvis tomt"
+                  className={inputClass}
+                />
+              </div>
+
+              <div>
+                <label
+                  htmlFor="orgNumber"
+                  className="mb-1.5 block text-sm font-semibold"
+                >
+                  Organisasjonsnummer{" "}
+                  <span className="font-normal text-[#7A9A8E]">(valgfritt)</span>
+                </label>
+                <input
+                  id="orgNumber"
+                  type="text"
+                  inputMode="numeric"
+                  value={orgNumber}
+                  onChange={(e) => setOrgNumber(normalizeOrgNumber(e.target.value))}
+                  placeholder="123456789"
+                  maxLength={9}
+                  className={inputClass}
+                />
+              </div>
+
+              <div>
+                <label
                   htmlFor="businessType"
                   className="mb-1.5 block text-sm font-semibold"
                 >
@@ -394,6 +462,27 @@ export default function RegisterPage() {
                   value={address}
                   onChange={(e) => setAddress(e.target.value)}
                   placeholder="Torgallmenningen 1"
+                  className={inputClass}
+                />
+              </div>
+
+              <div>
+                <label
+                  htmlFor="postalCode"
+                  className="mb-1.5 block text-sm font-semibold"
+                >
+                  Postnummer{" "}
+                  <span className="font-normal text-[#7A9A8E]">(valgfritt)</span>
+                </label>
+                <input
+                  id="postalCode"
+                  type="text"
+                  inputMode="numeric"
+                  autoComplete="postal-code"
+                  value={postalCode}
+                  onChange={(e) => setPostalCode(normalizePostalCode(e.target.value))}
+                  placeholder="5003"
+                  maxLength={4}
                   className={inputClass}
                 />
               </div>

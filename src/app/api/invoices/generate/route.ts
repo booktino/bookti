@@ -3,6 +3,7 @@ import { createClient } from "@supabase/supabase-js";
 import { createServerSupabaseClient } from "@/lib/supabase-server";
 import { generateInvoicePdf } from "@/lib/invoicing/generate-pdf";
 import { nextInvoiceNumber } from "@/lib/invoicing/invoice-number";
+import { resolveBusinessName } from "@/lib/norway/business-fields";
 
 type GenerateBody = {
   booking_id?: string;
@@ -69,7 +70,9 @@ export async function POST(request: Request) {
 
     const { data: salon, error: salonError } = await supabase
       .from("salons")
-      .select("name, logo_url, owner_id")
+      .select(
+        "name, logo_url, owner_id, business_name, org_number, address, postal_code, city",
+      )
       .eq("id", booking.salon_id)
       .single();
 
@@ -151,6 +154,13 @@ export async function POST(request: Request) {
 
     const pdfBytes = await generateInvoicePdf({
       salonName: salon.name,
+      sender: {
+        businessName: resolveBusinessName(salon.business_name, salon.name),
+        orgNumber: salon.org_number,
+        address: salon.address,
+        postalCode: salon.postal_code,
+        city: salon.city,
+      },
       logoBytes: logo?.bytes,
       logoMime: logo?.mime,
       invoiceNumber,
