@@ -1,20 +1,15 @@
 import { NextResponse } from "next/server";
-import { createClient } from "@supabase/supabase-js";
 import { createServerSupabaseClient } from "@/lib/supabase-server";
 import { generateInvoicePdf } from "@/lib/invoicing/generate-pdf";
-import { nextInvoiceNumber } from "@/lib/invoicing/invoice-number";
+import {
+  ensureInvoiceForBooking,
+  getServiceSupabase,
+} from "@/lib/invoicing/ensure-invoice";
 import { resolveBusinessName } from "@/lib/norway/business-fields";
 
 type GenerateBody = {
   booking_id?: string;
 };
-
-function getServiceSupabase() {
-  return createClient(
-    process.env.NEXT_PUBLIC_SUPABASE_URL!,
-    process.env.SUPABASE_SERVICE_ROLE_KEY!,
-  );
-}
 
 async function fetchLogoBytes(
   logoUrl: string | null,
@@ -99,56 +94,14 @@ export async function POST(request: Request) {
     const serviceName = service?.name ?? "Tjeneste";
 
     const serviceSupabase = getServiceSupabase();
+    const ensuredInvoice = await ensureInvoiceForBooking(serviceSupabase, booking_id);
 
-    const { data: existingInvoice } = await serviceSupabase
-      .from("invoices")
-      .select("invoice_number, created_at")
-      .eq("booking_id", booking_id)
-      .maybeSingle();
-
-    let invoiceNumber: string;
-    let issuedAt: Date;
-
-    if (existingInvoice) {
-      invoiceNumber = existingInvoice.invoice_number;
-      issuedAt = new Date(existingInvoice.created_at);
-    } else {
-      const year = new Date().getFullYear();
-      const { data: yearInvoices } = await serviceSupabase
-        .from("invoices")
-        .select("invoice_number")
-        .like("invoice_number", `BOOKTI-${year}-%`);
-
-      invoiceNumber = nextInvoiceNumber(
-        (yearInvoices ?? []).map((row) => row.invoice_number),
-        year,
-      );
-      issuedAt = new Date();
-
-      const { error: insertError } = await serviceSupabase.from("invoices").insert({
-        booking_id,
-        invoice_number: invoiceNumber,
-      });
-
-      if (insertError) {
-        if (insertError.code === "23505") {
-          const { data: retryInvoice } = await serviceSupabase
-            .from("invoices")
-            .select("invoice_number, created_at")
-            .eq("booking_id", booking_id)
-            .single();
-
-          if (retryInvoice) {
-            invoiceNumber = retryInvoice.invoice_number;
-            issuedAt = new Date(retryInvoice.created_at);
-          } else {
-            return NextResponse.json({ error: insertError.message }, { status: 500 });
-          }
-        } else {
-          return NextResponse.json({ error: insertError.message }, { status: 500 });
-        }
-      }
+    if (!ensuredInvoice) {
+      return NextResponse.json({ error: "Kunne ikke opprette faktura" }, { status: 500 });
     }
+
+    const invoiceNumber = ensuredInvoice.invoice_number;
+    const issuedAt = new Date(ensuredInvoice.created_at);
 
     const logo = await fetchLogoBytes(salon.logo_url);
 

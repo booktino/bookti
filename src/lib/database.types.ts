@@ -31,6 +31,7 @@ export interface Database {
           business_name: string | null
           org_number: string | null
           postal_code: string | null
+          invoice_start_number: number | null
           country: string
           logo_url: string | null
           cover_url: string | null
@@ -44,6 +45,10 @@ export interface Database {
           cancellation_refund_hours: number
           cancellation_fee_type: 'percent_50' | 'percent_100' | 'fixed' | null
           cancellation_fee_amount: number | null
+          enabled_payment_methods: string[]
+          notify_sms_booking: boolean
+          notify_push: boolean
+          notify_email_receipt: boolean
           stripe_customer_id: string | null
           stripe_subscription_id: string | null
           plan: 'trial' | 'pro' | 'cancelled'

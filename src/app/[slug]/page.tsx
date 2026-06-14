@@ -150,6 +150,7 @@ export default function SalonPage() {
   const [paymentMethod, setPaymentMethod] = useState<VisitPaymentMethod>("cash");
   const [submitting, setSubmitting] = useState(false);
   const [submitError, setSubmitError] = useState(false);
+  const [isBlocked, setIsBlocked] = useState(false);
   const [confirmed, setConfirmed] = useState<ConfirmedBooking | null>(null);
   const [paymentReturn, setPaymentReturn] = useState<"success" | "cancelled" | null>(null);
   const [cancellationTermsAccepted, setCancellationTermsAccepted] = useState(false);
@@ -161,6 +162,7 @@ export default function SalonPage() {
   >(new Map());
   const [monthBookings, setMonthBookings] = useState<BookingSlot[]>([]);
   const [scheduleLoading, setScheduleLoading] = useState(false);
+  const [salonRating, setSalonRating] = useState<{ avg: number; count: number } | null>(null);
   const [showWaitlist, setShowWaitlist] = useState(false);
   const [waitlistSlot, setWaitlistSlot] = useState<{ startsAt: string; endsAt: string; time: string } | null>(null);
   const fetchSalonData = useCallback(async () => {
@@ -185,17 +187,29 @@ export default function SalonPage() {
     const [servicesRes, staffRes] = await Promise.all([
       supabase
         .from("services")
-        .select("id, name, description, duration_min, price_nok, is_active")
+        .select("*")
         .eq("salon_id", salonData.id)
         .eq("is_active", true),
       supabase
         .from("staff")
-        .select("id, name, title, avatar_url, is_active")
+        .select("*")
         .eq("salon_id", salonData.id)
         .eq("is_active", true),
     ]);
 
     setSalon(salonData);
+
+    // Pobierz średnią ocen
+    const { data: reviews } = await supabase
+      .from('reviews')
+      .select('rating')
+      .eq('salon_id', salonData.id)
+      .not('submitted_at', 'is', null)
+      .gt('rating', 0)
+    if (reviews && reviews.length > 0) {
+      const avg = reviews.reduce((s, r) => s + r.rating, 0) / reviews.length
+      setSalonRating({ avg: Math.round(avg * 10) / 10, count: reviews.length })
+    }
     setServices(servicesRes.data ?? []);
     setStaffList(staffRes.data ?? []);
     if (servicesRes.data?.[0]) {
@@ -465,6 +479,19 @@ export default function SalonPage() {
     setSubmitting(true);
     setSubmitError(false);
 
+    // Sprawdź czy klient jest zablokowany
+    const blockCheck = await fetch('/api/bookings/check-blocked', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ salon_id: salon!.id, client_phone: clientPhone }),
+    }).then(r => r.json())
+
+    if (blockCheck.blocked) {
+      setSubmitting(false)
+      setSubmitError(true)
+      return null
+    }
+
     const booking = await createBookingRecord();
     setSubmitting(false);
 
@@ -474,7 +501,6 @@ export default function SalonPage() {
     }
 
     sendConfirmationSms(booking.id);
-    sendReviewRequest(booking.id);
     return booking.id;
   };
 
@@ -489,6 +515,23 @@ export default function SalonPage() {
 
     setSubmitting(true);
     setSubmitError(false);
+
+    // Sprawdź czy klient jest zablokowany
+    const blockCheck = await fetch('/api/bookings/check-blocked', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({
+        salon_id: salon.id,
+        client_phone: clientPhone,
+      }),
+    }).then(r => r.json())
+
+    if (blockCheck.blocked) {
+      setSubmitting(false)
+      setIsBlocked(true)
+      setSubmitError(true)
+      return
+    }
 
     const booking = await createBookingRecord();
     if (!booking) {
@@ -520,7 +563,6 @@ export default function SalonPage() {
         }
 
         sendConfirmationSms(booking.id);
-        sendReviewRequest(booking.id);
         window.location.href = data.url;
         return;
       } catch {
@@ -532,7 +574,6 @@ export default function SalonPage() {
 
     setSubmitting(false);
     sendConfirmationSms(booking.id);
-    sendReviewRequest(booking.id);
 
     const confirmedBooking = buildConfirmedBooking();
     if (confirmedBooking) setConfirmed(confirmedBooking);
@@ -653,6 +694,12 @@ export default function SalonPage() {
     <main className="flex min-h-[100dvh] flex-col bg-[#EFF8F4] font-sans text-[#0D3B2E]">
       <header className="shrink-0 border-b border-[#C8E6D8] bg-white px-4 py-4 text-center sm:px-6 sm:py-5">
         <h1 className="text-lg font-bold">{salon.name}</h1>
+        {salonRating && (
+          <div className="flex items-center justify-center gap-1 mt-0.5">
+            <span className="text-yellow-400 text-sm">{"⭐".repeat(Math.round(salonRating.avg))}</span>
+            <span className="text-xs text-[#7A9A8E] font-medium">{salonRating.avg} ({salonRating.count})</span>
+          </div>
+        )}
         {(salon.address || salon.city) && (
           <p className="text-xs text-[#7A9A8E]">
             {[salon.address, salon.city].filter(Boolean).join(", ")}
@@ -1038,7 +1085,9 @@ export default function SalonPage() {
               </div>
 
               {submitError && (
-                <p className="mt-3 text-center text-sm text-red-600">{no.common.error}</p>
+                <p className="mt-3 text-center text-sm text-red-600">
+                  {isBlocked ? 'Du er dessverre blokkert fra å booke hos denne salongen.' : no.common.error}
+                </p>
               )}
 
               {showCancellationPolicy && salon && (

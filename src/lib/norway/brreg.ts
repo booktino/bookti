@@ -5,12 +5,36 @@ export type BrregEnhet = {
   organisasjonsform?: {
     beskrivelse?: string;
   };
+  beliggenhetsadresse?: {
+    adresse?: string[];
+    postnummer?: string;
+    poststed?: string;
+  };
+};
+
+export type BrregBusinessData = {
+  navn: string;
+  orgForm: string;
+  adresse: string;
+  postnummer: string;
+  poststed: string;
 };
 
 export type BrregVerificationResult =
-  | { status: "verified"; navn: string; orgForm: string }
+  | ({ status: "verified" } & BrregBusinessData)
   | { status: "not_found" }
   | { status: "silent_fail" };
+
+function extractBusinessData(data: BrregEnhet): BrregBusinessData {
+  const addr = data.beliggenhetsadresse;
+  return {
+    navn: data.navn ?? "",
+    orgForm: data.organisasjonsform?.beskrivelse ?? "",
+    adresse: addr?.adresse?.[0] ?? "",
+    postnummer: addr?.postnummer ?? "",
+    poststed: addr?.poststed ?? "",
+  };
+}
 
 export async function verifyOrgNumberWithBrreg(
   orgNumber: string,
@@ -36,8 +60,7 @@ export async function verifyOrgNumberWithBrreg(
     const data = (await res.json()) as BrregEnhet;
     return {
       status: "verified",
-      navn: data.navn ?? "",
-      orgForm: data.organisasjonsform?.beskrivelse ?? "",
+      ...extractBusinessData(data),
     };
   } catch (error) {
     if (error instanceof DOMException && error.name === "AbortError") {

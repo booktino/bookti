@@ -37,7 +37,7 @@ export function StripeWalletButton({
     let cancelled = false;
 
     async function setup() {
-      const stripe = await loadStripe(publishableKey);
+      const stripe = await loadStripe(publishableKey!);
       if (!stripe || cancelled) return;
 
       const pr = stripe.paymentRequest({
@@ -103,7 +103,7 @@ export function StripeWalletButton({
           return;
         }
 
-        const stripe = await loadStripe(publishableKey);
+        const stripe = await loadStripe(publishableKey!);
         if (!stripe) {
           ev.complete("fail");
           onError();
@@ -160,7 +160,7 @@ export function StripeWalletButton({
   useEffect(() => {
     if (!paymentRequest || !canPay || !containerRef.current || !publishableKey) return;
 
-    let prButton: { unmount: () => void } | null = null;
+    let prButton: any = null;
     let cancelled = false;
 
     async function mountButton() {
@@ -168,7 +168,7 @@ export function StripeWalletButton({
       if (!stripe || !containerRef.current || cancelled) return;
 
       const elements = stripe.elements();
-      prButton = elements.create("paymentRequestButton", {
+      prButton = (elements.create as any)("paymentRequestButton", {
         paymentRequest,
         style: {
           paymentRequestButton: {
@@ -180,7 +180,7 @@ export function StripeWalletButton({
       });
 
       containerRef.current.innerHTML = "";
-      prButton.mount(containerRef.current);
+      prButton!.mount(containerRef.current);
     }
 
     void mountButton();

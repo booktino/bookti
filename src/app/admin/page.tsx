@@ -20,13 +20,14 @@ import {
   type CancellationFeeType,
 } from "@/lib/cancellation";
 import { PAYMENT_OPTIONS } from "@/lib/payments/methods";
+import type { PaymentMethod } from "@/lib/types/booking";
 import {
   isValidOrgNumber,
   isValidPostalCode,
   normalizeOrgNumber,
   normalizePostalCode,
 } from "@/lib/norway/business-fields";
-import { verifyOrgNumberWithBrreg } from "@/lib/norway/brreg";
+import { verifyOrgNumberWithBrreg, type BrregBusinessData } from "@/lib/norway/brreg";
 import { FREE_TRIAL_MONTHS } from "@/lib/pricing/plans";
 import { SLOT_INTERVAL_MIN } from "@/lib/availability";
 import {
@@ -342,6 +343,43 @@ const TABS: { id: AdminTab; label: string; icon: string }[] = [
 const inputClass =
   "mt-1 w-full rounded-lg border border-[#C8E6D8] bg-white px-3 py-2 text-sm outline-none focus:border-[#0F6E56] focus:ring-2 focus:ring-[#0F6E56]/20";
 
+const DEFAULT_PAYMENT_METHODS = PAYMENT_OPTIONS.map((p) => p.id);
+
+const NOTIFICATION_OPTIONS = [
+  { id: "notify_sms_booking" as const, label: "SMS ved ny booking" },
+  { id: "notify_push" as const, label: "Push-varsler" },
+  { id: "notify_email_receipt" as const, label: "E-post kvittering" },
+];
+
+function SettingsSaveRow({
+  saving,
+  saved,
+  error,
+  onSave,
+}: {
+  saving: boolean;
+  saved: boolean;
+  error: string | null;
+  onSave: () => void;
+}) {
+  return (
+    <div className="mt-4 flex flex-col items-end gap-2">
+      {error && <p className="text-sm font-semibold text-red-600">{error}</p>}
+      <div className="flex items-center gap-3">
+        {saved && <span className="text-sm font-semibold text-[#0F6E56]">✅ Lagret</span>}
+        <button
+          type="button"
+          onClick={onSave}
+          disabled={saving}
+          className="rounded-lg bg-[#0F6E56] px-4 py-2 text-sm font-bold text-white disabled:opacity-60"
+        >
+          {saving ? "Lagrer…" : "Lagre"}
+        </button>
+      </div>
+    </div>
+  );
+}
+
 function ActiveBadge({ active }: { active: boolean }) {
   return (
     <span
@@ -363,6 +401,61 @@ const RECURRING_FREQUENCY_OPTIONS: { id: RecurringFrequency; label: string }[] =
 ];
 
 const RECURRING_TIME_OPTIONS = RECURRING_SLOT_TIMES;
+const MANUAL_BOOKING_TIME_OPTIONS = RECURRING_SLOT_TIMES;
+
+type ManualBookingForm = {
+  clientName: string;
+  clientPhone: string;
+  clientEmail: string;
+  serviceId: string;
+  staffId: string;
+  date: string;
+  time: string;
+  notes: string;
+};
+
+const EMPTY_MANUAL_BOOKING_FORM: ManualBookingForm = {
+  clientName: "",
+  clientPhone: "",
+  clientEmail: "",
+  serviceId: "",
+  staffId: "",
+  date: "",
+  time: "09:00",
+  notes: "",
+};
+
+function isNorwegianPhoneValid(phone: string): boolean {
+  const digits = phone.replace(/\D/g, "");
+  if (digits.length === 8) return true;
+  if (digits.length === 10 && digits.startsWith("47")) return true;
+  return false;
+}
+
+function formatNorwegianPhone(phone: string): string {
+  const digits = phone.replace(/\D/g, "");
+  const normalized =
+    digits.length === 10 && digits.startsWith("47") ? digits.slice(2) : digits;
+  return `+47${normalized}`;
+}
+
+function buildManualBookingDateTime(date: string, time: string): Date {
+  const [year, month, day] = date.split("-").map(Number);
+  const [hours, minutes] = time.split(":").map(Number);
+  return new Date(year, month - 1, day, hours, minutes, 0, 0);
+}
+
+function staffBookingConflict(
+  staffId: string,
+  startsAt: Date,
+  endsAt: Date,
+  bookings: BookingRow[],
+): boolean {
+  const staffBookings = bookings.filter(
+    (b) => b.staff_id === staffId && b.status !== "cancelled",
+  );
+  return hasConflict(startsAt, endsAt, staffBookings);
+}
 
 function normalizeRecurringStartTime(time: string): string {
   const match = time.match(/(\d{1,2})[.:](\d{2})/);
@@ -690,6 +783,172 @@ function SlotDateTimePickerModal({
         >
           Avbryt
         </button>
+      </div>
+    </div>
+  );
+}
+
+function ManualBookingModal({
+  form,
+  services,
+  staffList,
+  saving,
+  error,
+  onChange,
+  onSave,
+  onClose,
+}: {
+  form: ManualBookingForm;
+  services: Service[];
+  staffList: Staff[];
+  saving: boolean;
+  error: string | null;
+  onChange: (patch: Partial<ManualBookingForm>) => void;
+  onSave: (e: React.FormEvent) => void;
+  onClose: () => void;
+}) {
+  const activeServices = services.filter((s) => s.is_active);
+  const activeStaff = staffList.filter((s) => s.is_active);
+
+  return (
+    <div
+      className="fixed inset-0 z-[60] flex items-center justify-center bg-black/60 p-4"
+      onClick={onClose}
+    >
+      <div
+        className="max-h-[90vh] w-full max-w-md overflow-y-auto rounded-2xl bg-white p-6 shadow-xl"
+        onClick={(e) => e.stopPropagation()}
+      >
+        <h2 className="mb-4 text-lg font-bold text-[#0F6E56]">Ny avtale</h2>
+        <form onSubmit={onSave} className="space-y-4">
+          <label className="block">
+            <span className="text-xs font-bold text-[#7A9A8E]">Kunde navn *</span>
+            <input
+              type="text"
+              required
+              value={form.clientName}
+              onChange={(e) => onChange({ clientName: e.target.value })}
+              className={inputClass}
+            />
+          </label>
+          <label className="block">
+            <span className="text-xs font-bold text-[#7A9A8E]">Telefon *</span>
+            <div className="mt-1 flex items-center gap-2">
+              <span className="text-sm font-bold text-[#7A9A8E]">+47</span>
+              <input
+                type="tel"
+                required
+                value={form.clientPhone}
+                onChange={(e) => onChange({ clientPhone: e.target.value })}
+                placeholder="12345678"
+                className={`${inputClass} mt-0 flex-1`}
+              />
+            </div>
+          </label>
+          <label className="block">
+            <span className="text-xs font-bold text-[#7A9A8E]">E-post</span>
+            <input
+              type="email"
+              value={form.clientEmail}
+              onChange={(e) => onChange({ clientEmail: e.target.value })}
+              className={inputClass}
+            />
+          </label>
+          <label className="block">
+            <span className="text-xs font-bold text-[#7A9A8E]">Tjeneste *</span>
+            <select
+              required
+              value={form.serviceId}
+              onChange={(e) => onChange({ serviceId: e.target.value })}
+              className={inputClass}
+            >
+              <option value="" disabled>
+                Velg tjeneste
+              </option>
+              {activeServices.map((service) => (
+                <option key={service.id} value={service.id}>
+                  {service.name} — {formatPriceNok(service.price_nok)}
+                </option>
+              ))}
+            </select>
+          </label>
+          <label className="block">
+            <span className="text-xs font-bold text-[#7A9A8E]">Ansatt *</span>
+            <select
+              required
+              value={form.staffId}
+              onChange={(e) => onChange({ staffId: e.target.value })}
+              className={inputClass}
+            >
+              <option value="" disabled>
+                Velg ansatt
+              </option>
+              {activeStaff.map((member) => (
+                <option key={member.id} value={member.id}>
+                  {member.name}
+                </option>
+              ))}
+            </select>
+          </label>
+          <div className="grid grid-cols-2 gap-3">
+            <label className="block">
+              <span className="text-xs font-bold text-[#7A9A8E]">Dato *</span>
+              <input
+                type="date"
+                required
+                value={form.date}
+                onChange={(e) => onChange({ date: e.target.value })}
+                className={inputClass}
+              />
+            </label>
+            <label className="block">
+              <span className="text-xs font-bold text-[#7A9A8E]">Tid *</span>
+              <select
+                required
+                value={form.time}
+                onChange={(e) => onChange({ time: e.target.value })}
+                className={inputClass}
+              >
+                {MANUAL_BOOKING_TIME_OPTIONS.map((time) => (
+                  <option key={time} value={time}>
+                    {time}
+                  </option>
+                ))}
+              </select>
+            </label>
+          </div>
+          <label className="block">
+            <span className="text-xs font-bold text-[#7A9A8E]">Notater</span>
+            <textarea
+              rows={3}
+              value={form.notes}
+              onChange={(e) => onChange({ notes: e.target.value })}
+              className={inputClass}
+            />
+          </label>
+          {error && (
+            <p className="rounded-lg border border-red-200 bg-red-50 px-3 py-2 text-sm text-red-600">
+              {error}
+            </p>
+          )}
+          <div className="flex gap-3 pt-2">
+            <button
+              type="button"
+              onClick={onClose}
+              disabled={saving}
+              className="flex-1 rounded-xl border border-[#C8E6D8] bg-[#EFF8F4] py-2.5 text-sm font-semibold text-[#4A6B5E] transition-colors hover:bg-[#C8E6D8] disabled:opacity-60"
+            >
+              Avbryt
+            </button>
+            <button
+              type="submit"
+              disabled={saving}
+              className="flex-1 rounded-xl bg-[#0F6E56] py-2.5 text-sm font-bold text-white transition-colors hover:bg-[#0d5c48] disabled:opacity-60"
+            >
+              {saving ? "Lagrer…" : "Lagre"}
+            </button>
+          </div>
+        </form>
       </div>
     </div>
   );
@@ -1085,15 +1344,29 @@ export default function AdminPage() {
   const [cancellationFeeType, setCancellationFeeType] =
     useState<CancellationFeeType>("percent_50");
   const [cancellationFeeAmount, setCancellationFeeAmount] = useState("");
-  const [settingsSaving, setSettingsSaving] = useState(false);
-  const [settingsSaved, setSettingsSaved] = useState(false);
-  const [settingsError, setSettingsError] = useState<string | null>(null);
+  const [businessSaving, setBusinessSaving] = useState(false);
+  const [businessSaved, setBusinessSaved] = useState(false);
+  const [businessError, setBusinessError] = useState<string | null>(null);
+  const [paymentSaving, setPaymentSaving] = useState(false);
+  const [paymentSaved, setPaymentSaved] = useState(false);
+  const [paymentError, setPaymentError] = useState<string | null>(null);
+  const [cancellationSaving, setCancellationSaving] = useState(false);
+  const [cancellationSaved, setCancellationSaved] = useState(false);
+  const [cancellationError, setCancellationError] = useState<string | null>(null);
+  const [notificationSaving, setNotificationSaving] = useState(false);
+  const [notificationSaved, setNotificationSaved] = useState(false);
+  const [notificationError, setNotificationError] = useState<string | null>(null);
+  const [enabledPaymentMethods, setEnabledPaymentMethods] =
+    useState<PaymentMethod[]>(DEFAULT_PAYMENT_METHODS);
+  const [notifySmsBooking, setNotifySmsBooking] = useState(true);
+  const [notifyPush, setNotifyPush] = useState(true);
+  const [notifyEmailReceipt, setNotifyEmailReceipt] = useState(true);
   const [businessName, setBusinessName] = useState("");
   const [orgNumber, setOrgNumber] = useState("");
   const [orgVerification, setOrgVerification] = useState<
     | { status: "idle" }
     | { status: "loading" }
-    | { status: "verified"; navn: string; orgForm: string }
+    | ({ status: "verified" } & BrregBusinessData)
     | { status: "not_found" }
   >({ status: "idle" });
   const orgVerifyTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
@@ -1101,22 +1374,103 @@ export default function AdminPage() {
   const [businessAddress, setBusinessAddress] = useState("");
   const [postalCode, setPostalCode] = useState("");
   const [businessCity, setBusinessCity] = useState("");
+  const [invoiceStartNumber, setInvoiceStartNumber] = useState("");
+  const [brregAutoFilled, setBrregAutoFilled] = useState({
+    businessName: false,
+    businessAddress: false,
+    postalCode: false,
+    businessCity: false,
+  });
+  const [brregFetchAvailable, setBrregFetchAvailable] = useState(false);
+  const businessFieldsRef = useRef({
+    businessName: "",
+    businessAddress: "",
+    postalCode: "",
+    businessCity: "",
+  });
   const [recurringModal, setRecurringModal] = useState<{
     bookingId: string;
     staffId: string;
     customerName: string;
     defaultStartTime: string;
   } | null>(null);
+  const [manualBookingModalOpen, setManualBookingModalOpen] = useState(false);
+  const [manualBookingForm, setManualBookingForm] = useState<ManualBookingForm>(
+    EMPTY_MANUAL_BOOKING_FORM,
+  );
+  const [manualBookingSaving, setManualBookingSaving] = useState(false);
+  const [manualBookingError, setManualBookingError] = useState<string | null>(null);
   const [downloadingInvoiceId, setDownloadingInvoiceId] = useState<string | null>(null);
   const [invoices, setInvoices] = useState<InvoiceRow[]>([]);
   const [invoiceExportMonth, setInvoiceExportMonth] = useState(getCurrentInvoiceExportMonth);
   const [exportingInvoicesCsv, setExportingInvoicesCsv] = useState(false);
   const invoiceExportMonthOptions = useMemo(() => getInvoiceExportMonthOptions(), []);
 
+  useEffect(() => {
+    businessFieldsRef.current = {
+      businessName,
+      businessAddress,
+      postalCode,
+      businessCity,
+    };
+  }, [businessName, businessAddress, postalCode, businessCity]);
+
+  function hasExistingBusinessFields(fields = businessFieldsRef.current) {
+    return (
+      fields.businessName.trim() !== "" ||
+      fields.businessAddress.trim() !== "" ||
+      fields.postalCode.trim() !== "" ||
+      fields.businessCity.trim() !== ""
+    );
+  }
+
+  function applyBrregData(data: BrregBusinessData) {
+    const filled = {
+      businessName: false,
+      businessAddress: false,
+      postalCode: false,
+      businessCity: false,
+    };
+
+    if (data.navn) {
+      setBusinessName(data.navn);
+      filled.businessName = true;
+    }
+    if (data.adresse) {
+      setBusinessAddress(data.adresse);
+      filled.businessAddress = true;
+    }
+    if (data.postnummer) {
+      setPostalCode(normalizePostalCode(data.postnummer));
+      filled.postalCode = true;
+    }
+    if (data.poststed) {
+      setBusinessCity(data.poststed);
+      filled.businessCity = true;
+    }
+
+    setBrregAutoFilled(filled);
+    setBrregFetchAvailable(false);
+  }
+
+  function handleFetchFromBrreg() {
+    if (orgVerification.status !== "verified") return;
+    applyBrregData(orgVerification);
+  }
+
+  function clearBrregAutoFilledFlag(
+    field: keyof typeof brregAutoFilled,
+  ) {
+    setBrregAutoFilled((prev) =>
+      prev[field] ? { ...prev, [field]: false } : prev,
+    );
+  }
+
   async function runOrgVerification(value: string) {
     const normalized = normalizeOrgNumber(value);
     if (normalized.length !== 9) {
       setOrgVerification({ status: "idle" });
+      setBrregFetchAvailable(false);
       return;
     }
 
@@ -1135,16 +1489,27 @@ export default function AdminPage() {
           status: "verified",
           navn: result.navn,
           orgForm: result.orgForm,
+          adresse: result.adresse,
+          postnummer: result.postnummer,
+          poststed: result.poststed,
         });
+
+        if (hasExistingBusinessFields()) {
+          setBrregFetchAvailable(true);
+        } else {
+          applyBrregData(result);
+        }
         return;
       }
 
       if (result.status === "not_found") {
         setOrgVerification({ status: "not_found" });
+        setBrregFetchAvailable(false);
         return;
       }
 
       setOrgVerification({ status: "idle" });
+      setBrregFetchAvailable(false);
     } catch {
       // AbortError or unexpected failure — silent fail
     }
@@ -1158,6 +1523,7 @@ export default function AdminPage() {
     const normalized = normalizeOrgNumber(value);
     if (normalized.length !== 9) {
       setOrgVerification({ status: "idle" });
+      setBrregFetchAvailable(false);
       return;
     }
 
@@ -1315,6 +1681,18 @@ export default function AdminPage() {
       setBusinessAddress(salonData.address ?? "");
       setPostalCode(salonData.postal_code ?? "");
       setBusinessCity(salonData.city ?? "");
+      setInvoiceStartNumber(
+        salonData.invoice_start_number != null
+          ? String(salonData.invoice_start_number)
+          : "",
+      );
+      setEnabledPaymentMethods(
+        (salonData.enabled_payment_methods as PaymentMethod[] | null) ??
+          DEFAULT_PAYMENT_METHODS,
+      );
+      setNotifySmsBooking(salonData.notify_sms_booking ?? true);
+      setNotifyPush(salonData.notify_push ?? true);
+      setNotifyEmailReceipt(salonData.notify_email_receipt ?? true);
       setBookings((bookingsRes.data as BookingRow[] | null) ?? []);
       setInvoices((invoicesRes.data as InvoiceRow[] | null) ?? []);
       setServices(servicesRes.data ?? []);
@@ -1329,6 +1707,42 @@ export default function AdminPage() {
       cancelled = true;
     };
   }, [router]);
+
+  useEffect(() => {
+    const salonId = salon?.id;
+    if (tab !== "invoices" || !salonId) return;
+
+    let cancelled = false;
+
+    async function ensureMissingInvoices() {
+      try {
+        await fetch("/api/invoices/ensure", { method: "POST" });
+      } catch {
+        console.error("[admin] ensure invoices failed");
+      }
+
+      if (cancelled) return;
+
+      const supabase = createClient();
+      const { data } = await supabase
+        .from("invoices")
+        .select(
+          "invoice_number, created_at, bookings!inner(client_name, client_phone, price_nok, salon_id, services(name))",
+        )
+        .eq("bookings.salon_id", salonId)
+        .order("created_at", { ascending: false });
+
+      if (!cancelled) {
+        setInvoices((data as InvoiceRow[] | null) ?? []);
+      }
+    }
+
+    ensureMissingInvoices();
+
+    return () => {
+      cancelled = true;
+    };
+  }, [tab, salon?.id]);
 
   const today = getTodayKey();
 
@@ -1462,6 +1876,93 @@ export default function AdminPage() {
     setSelectedDay(today);
   }
 
+  function openManualBookingModal() {
+    const defaultStaffId =
+      selectedStaffFilter !== "all"
+        ? selectedStaffFilter
+        : (staffList.find((s) => s.is_active)?.id ?? "");
+    setManualBookingForm({
+      ...EMPTY_MANUAL_BOOKING_FORM,
+      date: selectedDay ?? getTodayKey(),
+      staffId: defaultStaffId,
+      serviceId: services.find((s) => s.is_active)?.id ?? "",
+    });
+    setManualBookingError(null);
+    setManualBookingModalOpen(true);
+  }
+
+  function closeManualBookingModal() {
+    setManualBookingModalOpen(false);
+    setManualBookingForm(EMPTY_MANUAL_BOOKING_FORM);
+    setManualBookingError(null);
+  }
+
+  async function saveManualBooking(e: React.FormEvent) {
+    e.preventDefault();
+    if (!salon) return;
+
+    const service = services.find((s) => s.id === manualBookingForm.serviceId);
+    if (!service || !manualBookingForm.staffId) return;
+
+    if (!isNorwegianPhoneValid(manualBookingForm.clientPhone)) {
+      setManualBookingError("Ugyldig telefonnummer (8 siffer)");
+      return;
+    }
+
+    const startsAt = buildManualBookingDateTime(
+      manualBookingForm.date,
+      manualBookingForm.time,
+    );
+    const endsAt = new Date(startsAt.getTime() + service.duration_min * 60_000);
+
+    if (
+      staffBookingConflict(
+        manualBookingForm.staffId,
+        startsAt,
+        endsAt,
+        bookings,
+      )
+    ) {
+      setManualBookingError("Denne tiden er allerede booket");
+      return;
+    }
+
+    setManualBookingSaving(true);
+    setManualBookingError(null);
+
+    const supabase = createClient();
+    const { data, error } = await supabase
+      .from("bookings")
+      .insert({
+        salon_id: salon.id,
+        staff_id: manualBookingForm.staffId,
+        service_id: service.id,
+        client_name: manualBookingForm.clientName.trim(),
+        client_phone: formatNorwegianPhone(manualBookingForm.clientPhone),
+        client_email: manualBookingForm.clientEmail.trim() || null,
+        client_notes: manualBookingForm.notes.trim() || null,
+        starts_at: startsAt.toISOString(),
+        ends_at: endsAt.toISOString(),
+        price_nok: service.price_nok,
+        status: "confirmed",
+        source: "manual",
+        sms_confirmation_sent: false,
+        sms_reminder_sent: false,
+      })
+      .select("*, staff(name), services(name)")
+      .single();
+
+    setManualBookingSaving(false);
+
+    if (error || !data) {
+      setManualBookingError("Kunne ikke lagre avtalen");
+      return;
+    }
+
+    setBookings((prev) => [...prev, data as BookingRow]);
+    closeManualBookingModal();
+  }
+
   function openAddService() {
     setEditingService(null);
     setServiceForm(EMPTY_SERVICE_FORM);
@@ -1532,27 +2033,125 @@ export default function AdminPage() {
     closeServiceModal();
   }
 
-  async function saveCancellationSettings() {
+  async function saveBusinessSettings() {
     if (!salon) return;
 
-    setSettingsSaving(true);
-    setSettingsSaved(false);
-    setSettingsError(null);
+    setBusinessSaving(true);
+    setBusinessSaved(false);
+    setBusinessError(null);
 
     const normalizedOrg = normalizeOrgNumber(orgNumber);
     const normalizedPostal = normalizePostalCode(postalCode);
 
     if (!isValidOrgNumber(orgNumber)) {
-      setSettingsError("Organisasjonsnummer må være 9 siffer.");
-      setSettingsSaving(false);
+      setBusinessError("Organisasjonsnummer må være 9 siffer.");
+      setBusinessSaving(false);
       return;
     }
 
     if (!isValidPostalCode(postalCode)) {
-      setSettingsError("Postnummer må være 4 siffer.");
-      setSettingsSaving(false);
+      setBusinessError("Postnummer må være 4 siffer.");
+      setBusinessSaving(false);
       return;
     }
+
+    const salonHasInvoices = invoices.length > 0;
+    let parsedInvoiceStartNumber: number | null = null;
+
+    if (!salonHasInvoices) {
+      const trimmed = invoiceStartNumber.trim();
+      if (trimmed === "") {
+        parsedInvoiceStartNumber = null;
+      } else {
+        const parsed = parseInt(trimmed, 10);
+        if (!Number.isFinite(parsed) || parsed < 1) {
+          setBusinessError("Neste fakturanummer må være et positivt heltall.");
+          setBusinessSaving(false);
+          return;
+        }
+        parsedInvoiceStartNumber = parsed;
+      }
+    }
+
+    const supabase = createClient();
+
+    const updatePayload: Database["public"]["Tables"]["salons"]["Update"] = {
+      business_name: businessName.trim() || null,
+      org_number: normalizedOrg || null,
+      address: businessAddress.trim() || null,
+      postal_code: normalizedPostal || null,
+      city: businessCity.trim() || salon.city,
+    };
+
+    if (!salonHasInvoices) {
+      updatePayload.invoice_start_number = parsedInvoiceStartNumber;
+    }
+
+    const { data, error } = await supabase
+      .from("salons")
+      .update(updatePayload)
+      .eq("id", salon.id)
+      .select()
+      .single();
+
+    if (error) {
+      setBusinessError(error.message);
+    } else if (data) {
+      setSalon(data);
+      setBusinessName(data.business_name ?? "");
+      setOrgNumber(data.org_number ?? "");
+      setBusinessAddress(data.address ?? "");
+      setPostalCode(data.postal_code ?? "");
+      setBusinessCity(data.city ?? "");
+      setInvoiceStartNumber(
+        data.invoice_start_number != null
+          ? String(data.invoice_start_number)
+          : "",
+      );
+      setBusinessSaved(true);
+      setTimeout(() => setBusinessSaved(false), 2000);
+    }
+
+    setBusinessSaving(false);
+  }
+
+  async function savePaymentSettings() {
+    if (!salon) return;
+
+    setPaymentSaving(true);
+    setPaymentSaved(false);
+    setPaymentError(null);
+
+    const supabase = createClient();
+
+    const { data, error } = await supabase
+      .from("salons")
+      .update({ enabled_payment_methods: enabledPaymentMethods })
+      .eq("id", salon.id)
+      .select()
+      .single();
+
+    if (error) {
+      setPaymentError(error.message);
+    } else if (data) {
+      setSalon(data);
+      setEnabledPaymentMethods(
+        (data.enabled_payment_methods as PaymentMethod[] | null) ??
+          enabledPaymentMethods,
+      );
+      setPaymentSaved(true);
+      setTimeout(() => setPaymentSaved(false), 2000);
+    }
+
+    setPaymentSaving(false);
+  }
+
+  async function saveCancellationSettings() {
+    if (!salon) return;
+
+    setCancellationSaving(true);
+    setCancellationSaved(false);
+    setCancellationError(null);
 
     const supabase = createClient();
 
@@ -1564,11 +2163,6 @@ export default function AdminPage() {
     const { data, error } = await supabase
       .from("salons")
       .update({
-        business_name: businessName.trim() || null,
-        org_number: normalizedOrg || null,
-        address: businessAddress.trim() || null,
-        postal_code: normalizedPostal || null,
-        city: businessCity.trim() || salon.city,
         cancellation_allowed: cancellationAllowed,
         cancellation_hours: cancellationHours,
         cancellation_reason_required: cancellationReasonRequired,
@@ -1582,18 +2176,59 @@ export default function AdminPage() {
       .single();
 
     if (error) {
-      setSettingsError(error.message);
+      setCancellationError(error.message);
     } else if (data) {
       setSalon(data);
-      setBusinessName(data.business_name ?? "");
-      setOrgNumber(data.org_number ?? "");
-      setBusinessAddress(data.address ?? "");
-      setPostalCode(data.postal_code ?? "");
-      setBusinessCity(data.city ?? "");
-      setSettingsSaved(true);
+      setCancellationAllowed(data.cancellation_allowed ?? false);
+      setCancellationHours(data.cancellation_hours ?? 24);
+      setCancellationReasonRequired(data.cancellation_reason_required ?? false);
+      setCancellationFeeEnabled(data.cancellation_fee_enabled ?? false);
+      setCancellationRefundHours(data.cancellation_refund_hours ?? 24);
+      setCancellationFeeType(data.cancellation_fee_type ?? "percent_50");
+      setCancellationFeeAmount(
+        data.cancellation_fee_amount != null
+          ? String(data.cancellation_fee_amount)
+          : "",
+      );
+      setCancellationSaved(true);
+      setTimeout(() => setCancellationSaved(false), 2000);
     }
 
-    setSettingsSaving(false);
+    setCancellationSaving(false);
+  }
+
+  async function saveNotificationSettings() {
+    if (!salon) return;
+
+    setNotificationSaving(true);
+    setNotificationSaved(false);
+    setNotificationError(null);
+
+    const supabase = createClient();
+
+    const { data, error } = await supabase
+      .from("salons")
+      .update({
+        notify_sms_booking: notifySmsBooking,
+        notify_push: notifyPush,
+        notify_email_receipt: notifyEmailReceipt,
+      })
+      .eq("id", salon.id)
+      .select()
+      .single();
+
+    if (error) {
+      setNotificationError(error.message);
+    } else if (data) {
+      setSalon(data);
+      setNotifySmsBooking(data.notify_sms_booking ?? true);
+      setNotifyPush(data.notify_push ?? true);
+      setNotifyEmailReceipt(data.notify_email_receipt ?? true);
+      setNotificationSaved(true);
+      setTimeout(() => setNotificationSaved(false), 2000);
+    }
+
+    setNotificationSaving(false);
   }
 
   async function confirmDeleteService() {
@@ -1876,7 +2511,8 @@ export default function AdminPage() {
 
               <div className="relative flex flex-col gap-4 lg:flex-row lg:items-start">
                 <div className="min-w-0 flex-1 rounded-xl border border-[#C8E6D8] bg-white p-4 shadow-sm sm:p-6">
-                  <div className="mb-4 flex flex-wrap gap-2">
+                  <div className="mb-4 flex flex-wrap items-center justify-between gap-2">
+                    <div className="flex flex-wrap gap-2">
                     <button
                       type="button"
                       onClick={() => setSelectedStaffFilter("all")}
@@ -1902,6 +2538,14 @@ export default function AdminPage() {
                         {member.name}
                       </button>
                     ))}
+                    </div>
+                    <button
+                      type="button"
+                      onClick={openManualBookingModal}
+                      className="rounded-lg bg-[#0F6E56] px-3 py-1.5 text-xs font-bold text-white transition-colors hover:bg-[#0d5c48]"
+                    >
+                      + Ny avtale
+                    </button>
                   </div>
 
                   <div className="mb-4 flex flex-wrap items-center justify-between gap-3">
@@ -2343,16 +2987,6 @@ export default function AdminPage() {
                 </p>
                 <div className="space-y-3">
                   <label className="block">
-                    <span className="text-xs font-bold text-[#7A9A8E]">Firmanavn</span>
-                    <input
-                      type="text"
-                      value={businessName}
-                      onChange={(e) => setBusinessName(e.target.value)}
-                      placeholder={salon.name}
-                      className={inputClass}
-                    />
-                  </label>
-                  <label className="block">
                     <span className="text-xs font-bold text-[#7A9A8E]">Organisasjonsnummer</span>
                     <input
                       type="text"
@@ -2387,16 +3021,51 @@ export default function AdminPage() {
                         ⚠️ Fant ikke dette organisasjonsnummeret i Brønnøysundregistrene
                       </p>
                     )}
+                    {brregFetchAvailable && orgVerification.status === "verified" && (
+                      <button
+                        type="button"
+                        onClick={handleFetchFromBrreg}
+                        className="mt-2 rounded-lg border border-[#0F6E56] px-3 py-1.5 text-xs font-bold text-[#0F6E56] transition hover:bg-[#0F6E56]/5"
+                      >
+                        Hent fra Brønnøysundregistrene
+                      </button>
+                    )}
+                  </label>
+                  <label className="block">
+                    <span className="text-xs font-bold text-[#7A9A8E]">Firmanavn</span>
+                    <input
+                      type="text"
+                      value={businessName}
+                      onChange={(e) => {
+                        setBusinessName(e.target.value);
+                        clearBrregAutoFilledFlag("businessName");
+                      }}
+                      placeholder={salon.name}
+                      className={inputClass}
+                    />
+                    {brregAutoFilled.businessName && (
+                      <p className="mt-1 text-[11px] text-[#7A9A8E]">
+                        Auto-utfylt fra Brønnøysundregistrene - du kan endre om nødvendig
+                      </p>
+                    )}
                   </label>
                   <label className="block">
                     <span className="text-xs font-bold text-[#7A9A8E]">Adresse</span>
                     <input
                       type="text"
                       value={businessAddress}
-                      onChange={(e) => setBusinessAddress(e.target.value)}
+                      onChange={(e) => {
+                        setBusinessAddress(e.target.value);
+                        clearBrregAutoFilledFlag("businessAddress");
+                      }}
                       placeholder="Gateadresse 1"
                       className={inputClass}
                     />
+                    {brregAutoFilled.businessAddress && (
+                      <p className="mt-1 text-[11px] text-[#7A9A8E]">
+                        Auto-utfylt fra Brønnøysundregistrene - du kan endre om nødvendig
+                      </p>
+                    )}
                   </label>
                   <div className="grid grid-cols-2 gap-3">
                     <label className="block">
@@ -2405,23 +3074,61 @@ export default function AdminPage() {
                         type="text"
                         inputMode="numeric"
                         value={postalCode}
-                        onChange={(e) => setPostalCode(normalizePostalCode(e.target.value))}
+                        onChange={(e) => {
+                          setPostalCode(normalizePostalCode(e.target.value));
+                          clearBrregAutoFilledFlag("postalCode");
+                        }}
                         placeholder="5003"
                         maxLength={4}
                         className={inputClass}
                       />
+                      {brregAutoFilled.postalCode && (
+                        <p className="mt-1 text-[11px] text-[#7A9A8E]">
+                          Auto-utfylt fra Brønnøysundregistrene - du kan endre om nødvendig
+                        </p>
+                      )}
                     </label>
                     <label className="block">
                       <span className="text-xs font-bold text-[#7A9A8E]">By</span>
                       <input
                         type="text"
                         value={businessCity}
-                        onChange={(e) => setBusinessCity(e.target.value)}
+                        onChange={(e) => {
+                          setBusinessCity(e.target.value);
+                          clearBrregAutoFilledFlag("businessCity");
+                        }}
                         placeholder="Bergen"
                         className={inputClass}
                       />
+                      {brregAutoFilled.businessCity && (
+                        <p className="mt-1 text-[11px] text-[#7A9A8E]">
+                          Auto-utfylt fra Brønnøysundregistrene - du kan endre om nødvendig
+                        </p>
+                      )}
                     </label>
                   </div>
+                  <label className="block border-t border-[#C8E6D8] pt-3">
+                    <span className="text-xs font-bold text-[#7A9A8E]">Neste fakturanummer</span>
+                    <input
+                      type="number"
+                      min={1}
+                      step={1}
+                      value={invoiceStartNumber}
+                      onChange={(e) => setInvoiceStartNumber(e.target.value)}
+                      disabled={invoices.length > 0}
+                      placeholder="43"
+                      className={`${inputClass} disabled:cursor-not-allowed disabled:bg-[#EFF8F4] disabled:opacity-60`}
+                    />
+                    <p className="mt-1 text-[11px] text-[#7A9A8E]">
+                      Hvis du allerede har sendt fakturaer, sett nummeret til neste faktura her
+                      (f.eks. hvis siste faktura var 0042, sett 43)
+                    </p>
+                    {invoices.length > 0 && (
+                      <p className="mt-1 text-[11px] font-medium text-[#7A9A8E]">
+                        Kan ikke endres etter første faktura
+                      </p>
+                    )}
+                  </label>
                   <div className="grid grid-cols-2 gap-3 border-t border-[#C8E6D8] pt-3">
                     <div>
                       <span className="text-xs font-bold text-[#7A9A8E]">E-post</span>
@@ -2433,6 +3140,12 @@ export default function AdminPage() {
                     </div>
                   </div>
                 </div>
+                <SettingsSaveRow
+                  saving={businessSaving}
+                  saved={businessSaved}
+                  error={businessError}
+                  onSave={saveBusinessSettings}
+                />
               </section>
 
               <section className="rounded-xl border border-[#C8E6D8] bg-white p-5 shadow-sm">
@@ -2440,7 +3153,18 @@ export default function AdminPage() {
                 <div className="space-y-2">
                   {PAYMENT_OPTIONS.map((opt) => (
                     <label key={opt.id} className="flex items-center gap-3 rounded-lg border border-[#C8E6D8] px-4 py-3 text-sm">
-                      <input type="checkbox" defaultChecked className="accent-[#0F6E56]" />
+                      <input
+                        type="checkbox"
+                        checked={enabledPaymentMethods.includes(opt.id)}
+                        onChange={(e) => {
+                          setEnabledPaymentMethods((prev) =>
+                            e.target.checked
+                              ? [...prev, opt.id]
+                              : prev.filter((id) => id !== opt.id),
+                          );
+                        }}
+                        className="accent-[#0F6E56]"
+                      />
                       <span className="font-semibold">{opt.label}</span>
                       <span className="text-xs text-[#7A9A8E]">{opt.description}</span>
                     </label>
@@ -2450,6 +3174,12 @@ export default function AdminPage() {
                   Plan: {salon.plan}
                   {salon.stripe_customer_id ? ` · Stripe: ${salon.stripe_customer_id}` : ""}
                 </p>
+                <SettingsSaveRow
+                  saving={paymentSaving}
+                  saved={paymentSaved}
+                  error={paymentError}
+                  onSave={savePaymentSettings}
+                />
               </section>
 
               <section className="rounded-xl border border-[#C8E6D8] bg-white p-5 shadow-sm">
@@ -2585,36 +3315,48 @@ export default function AdminPage() {
                     </div>
                   </div>
                 )}
+                <SettingsSaveRow
+                  saving={cancellationSaving}
+                  saved={cancellationSaved}
+                  error={cancellationError}
+                  onSave={saveCancellationSettings}
+                />
               </section>
 
               <section className="rounded-xl border border-[#C8E6D8] bg-white p-5 shadow-sm">
                 <h3 className="mb-4 text-sm font-bold text-[#0F6E56]">{no.admin.notifications}</h3>
-                {["SMS ved ny booking", "Push-varsler", "E-post kvittering"].map((n) => (
-                  <label key={n} className="mb-2 flex items-center gap-3 text-sm">
-                    <input type="checkbox" defaultChecked className="accent-[#0F6E56]" />
-                    {n}
+                {NOTIFICATION_OPTIONS.map((opt) => (
+                  <label key={opt.id} className="mb-2 flex items-center gap-3 text-sm">
+                    <input
+                      type="checkbox"
+                      checked={
+                        opt.id === "notify_sms_booking"
+                          ? notifySmsBooking
+                          : opt.id === "notify_push"
+                            ? notifyPush
+                            : notifyEmailReceipt
+                      }
+                      onChange={(e) => {
+                        if (opt.id === "notify_sms_booking") {
+                          setNotifySmsBooking(e.target.checked);
+                        } else if (opt.id === "notify_push") {
+                          setNotifyPush(e.target.checked);
+                        } else {
+                          setNotifyEmailReceipt(e.target.checked);
+                        }
+                      }}
+                      className="accent-[#0F6E56]"
+                    />
+                    {opt.label}
                   </label>
                 ))}
+                <SettingsSaveRow
+                  saving={notificationSaving}
+                  saved={notificationSaved}
+                  error={notificationError}
+                  onSave={saveNotificationSettings}
+                />
               </section>
-
-              <div className="flex flex-col gap-2">
-                <div className="flex items-center gap-4">
-                  <button
-                    type="button"
-                    onClick={saveCancellationSettings}
-                    disabled={settingsSaving}
-                    className="btn-primary rounded-xl px-6 py-3 text-sm font-bold text-white disabled:opacity-60"
-                  >
-                    {settingsSaving ? no.common.loading : no.admin.save}
-                  </button>
-                  {settingsSaved && (
-                    <span className="text-sm font-semibold text-[#0F6E56]">Lagret!</span>
-                  )}
-                </div>
-                {settingsError && (
-                  <p className="text-sm font-semibold text-red-600">{settingsError}</p>
-                )}
-              </div>
             </div>
           )}
         </div>
@@ -2821,6 +3563,19 @@ export default function AdminPage() {
           customerName={recurringModal.customerName}
           defaultStartTime={recurringModal.defaultStartTime}
           onClose={() => setRecurringModal(null)}
+        />
+      )}
+
+      {manualBookingModalOpen && (
+        <ManualBookingModal
+          form={manualBookingForm}
+          services={services}
+          staffList={staffList}
+          saving={manualBookingSaving}
+          error={manualBookingError}
+          onChange={(patch) => setManualBookingForm((f) => ({ ...f, ...patch }))}
+          onSave={saveManualBooking}
+          onClose={closeManualBookingModal}
         />
       )}
     </main>

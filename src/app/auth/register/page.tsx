@@ -12,6 +12,7 @@ import {
   normalizeOrgNumber,
   normalizePostalCode,
 } from "@/lib/norway/business-fields";
+import { PAYMENT_OPTIONS } from "@/lib/payments/methods";
 import { FREE_TRIAL_MONTHS } from "@/lib/pricing/plans";
 import { createClient } from "@/lib/supabase";
 
@@ -82,6 +83,7 @@ async function createSalon(
 ): Promise<{ error: string | null }> {
   const salon: SalonInsert = {
     owner_id: ownerId,
+    invoice_start_number: null,
     name: form.businessName.trim(),
     slug: buildSlug(form.businessName),
     phone: form.phone.trim(),
@@ -109,6 +111,10 @@ async function createSalon(
     cancellation_refund_hours: 24,
     cancellation_fee_type: null,
     cancellation_fee_amount: null,
+    enabled_payment_methods: PAYMENT_OPTIONS.map((p) => p.id),
+    notify_sms_booking: true,
+    notify_push: true,
+    notify_email_receipt: true,
     is_active: true,
   };
 
