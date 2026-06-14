@@ -1,4 +1,10 @@
+import { SLOT_INTERVAL_MIN } from "../availability";
+
 export type RecurringFrequency = "weekly" | "biweekly" | "monthly";
+
+export const ALTERNATIVE_SLOT_OFFSETS_MIN = [
+  15, 30, 45, 60, 75, 90, -15, -30, -45, -60, -75, -90,
+];
 
 export type RecurringSlotStatus = "available" | "rescheduled" | "unavailable";
 
@@ -87,7 +93,7 @@ export function findAlternativeSlot(
   startTime: string,
   existing: { starts_at: string; ends_at: string }[],
 ): Date | null {
-  for (const offsetMin of [30, 60, 90, -30, -60, -90]) {
+  for (const offsetMin of ALTERNATIVE_SLOT_OFFSETS_MIN) {
     const candidateStart = new Date(originalStart.getTime() + offsetMin * 60 * 1000);
     const candidateEnd = new Date(candidateStart.getTime() + durationMs);
     if (!hasConflict(candidateStart, candidateEnd, existing)) {
@@ -247,8 +253,8 @@ export function getQueryWindow(planned: BookingTemplate[]) {
 export const RECURRING_SLOT_TIMES = (() => {
   const options: string[] = [];
   for (let hour = 8; hour <= 20; hour++) {
-    for (const minute of [0, 30]) {
-      if (hour === 20 && minute === 30) break;
+    for (let minute = 0; minute < 60; minute += SLOT_INTERVAL_MIN) {
+      if (hour === 20 && minute > 0) break;
       options.push(
         `${String(hour).padStart(2, "0")}:${String(minute).padStart(2, "0")}`,
       );

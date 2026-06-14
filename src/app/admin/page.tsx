@@ -21,9 +21,11 @@ import {
 } from "@/lib/cancellation";
 import { PAYMENT_OPTIONS } from "@/lib/payments/methods";
 import { FREE_TRIAL_MONTHS } from "@/lib/pricing/plans";
+import { SLOT_INTERVAL_MIN } from "@/lib/availability";
 import {
   formatRecurringDateLabel,
   hasConflict,
+  RECURRING_SLOT_TIMES,
   type RecurringPreviewSlot,
   type RecurringTimeSlotAvailability,
 } from "@/lib/bookings/recurring";
@@ -253,18 +255,7 @@ const RECURRING_FREQUENCY_OPTIONS: { id: RecurringFrequency; label: string }[] =
   { id: "monthly", label: "Hver måned" },
 ];
 
-const RECURRING_TIME_OPTIONS = (() => {
-  const options: string[] = [];
-  for (let hour = 8; hour <= 20; hour++) {
-    for (const minute of [0, 30]) {
-      if (hour === 20 && minute === 30) break;
-      options.push(
-        `${String(hour).padStart(2, "0")}:${String(minute).padStart(2, "0")}`,
-      );
-    }
-  }
-  return options;
-})();
+const RECURRING_TIME_OPTIONS = RECURRING_SLOT_TIMES;
 
 function normalizeRecurringStartTime(time: string): string {
   const match = time.match(/(\d{1,2})[.:](\d{2})/);
@@ -273,7 +264,7 @@ function normalizeRecurringStartTime(time: string): string {
   const minMinutes = 8 * 60;
   const maxMinutes = 20 * 60;
   const clamped = Math.min(maxMinutes, Math.max(minMinutes, totalMinutes));
-  const rounded = Math.round(clamped / 30) * 30;
+  const rounded = Math.round(clamped / SLOT_INTERVAL_MIN) * SLOT_INTERVAL_MIN;
   const hours = Math.floor(rounded / 60);
   const minutes = rounded % 60;
   const normalized = `${String(hours).padStart(2, "0")}:${String(minutes).padStart(2, "0")}`;

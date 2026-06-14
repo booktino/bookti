@@ -1,8 +1,8 @@
 import type { TimeSlot } from "../types/booking";
+import { SLOT_INTERVAL_MIN } from "../availability";
 
 const DEFAULT_OPEN = 9;
 const DEFAULT_CLOSE = 17;
-const SLOT_INTERVAL_MIN = 30;
 
 export function generateDaySlots(
   date: string,

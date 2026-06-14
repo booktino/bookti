@@ -1,5 +1,6 @@
 import { NextRequest, NextResponse } from 'next/server'
 import { createClient } from '@supabase/supabase-js'
+import { ALTERNATIVE_SLOT_OFFSETS_MIN } from '@/lib/bookings/recurring'
 import { sendTwilioSms } from '@/lib/notifications/twilio'
 
 const supabase = createClient(
@@ -52,7 +53,7 @@ function findAlternativeSlot(
   startTime: string,
   existing: { starts_at: string; ends_at: string }[],
 ): Date | null {
-  for (const offsetMin of [30, 60, 90, -30, -60, -90]) {
+  for (const offsetMin of ALTERNATIVE_SLOT_OFFSETS_MIN) {
     const candidateStart = new Date(originalStart.getTime() + offsetMin * 60 * 1000)
     const candidateEnd = new Date(candidateStart.getTime() + durationMs)
     if (!hasConflict(candidateStart, candidateEnd, existing)) {

@@ -1,3 +1,6 @@
+/** Granularity for selectable booking start times (not service duration). */
+export const SLOT_INTERVAL_MIN = 15;
+
 export type AvailabilityEntry = {
   day_of_week: number;
   start_time: string;
@@ -57,7 +60,7 @@ export function generateTimeSlots(
   const end = parseTimeToMinutes(endTime);
   const slots: string[] = [];
 
-  for (let t = start; t + durationMin <= end; t += durationMin) {
+  for (let t = start; t + durationMin <= end; t += SLOT_INTERVAL_MIN) {
     slots.push(formatMinutesToTime(t));
   }
 
