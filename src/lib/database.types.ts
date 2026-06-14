@@ -19,6 +19,7 @@ export interface Database {
       salons: {
         Row: {
           id: string
+          salon_number: number
           owner_id: string
           name: string
           slug: string
@@ -51,7 +52,7 @@ export interface Database {
           created_at: string
           updated_at: string
         }
-        Insert: Omit<Database['public']['Tables']['salons']['Row'], 'id' | 'created_at' | 'updated_at'>
+        Insert: Omit<Database['public']['Tables']['salons']['Row'], 'id' | 'salon_number' | 'created_at' | 'updated_at'>
         Update: Partial<Database['public']['Tables']['salons']['Insert']>
       }
       staff: {
