@@ -2195,6 +2195,195 @@ export default function AdminPage() {
         salonName={salon?.name ?? ""}
         slug={salon?.slug ?? ""}
       />
+
+      {staffModalOpen && (
+        <div
+          className="fixed inset-0 z-[60] flex items-center justify-center bg-black/60 p-4"
+          onClick={closeStaffModal}
+        >
+          <div
+            className="w-full max-w-md rounded-xl border border-[#C8E6D8] bg-white p-6 shadow-xl"
+            onClick={(e) => e.stopPropagation()}
+          >
+            <h2 className="mb-4 text-lg font-bold text-[#0F6E56]">
+              {editingStaff ? "Rediger ansatt" : "Legg til ansatt"}
+            </h2>
+            <form onSubmit={saveStaff} className="space-y-4">
+              <label className="block">
+                <span className="text-xs font-bold text-[#7A9A8E]">Navn *</span>
+                <input
+                  type="text"
+                  required
+                  value={staffForm.name}
+                  onChange={(e) => setStaffForm((f) => ({ ...f, name: e.target.value }))}
+                  className={inputClass}
+                />
+              </label>
+              <label className="block">
+                <span className="text-xs font-bold text-[#7A9A8E]">Tittel</span>
+                <input
+                  type="text"
+                  value={staffForm.title}
+                  onChange={(e) => setStaffForm((f) => ({ ...f, title: e.target.value }))}
+                  className={inputClass}
+                />
+              </label>
+              <label className="block">
+                <span className="text-xs font-bold text-[#7A9A8E]">Telefon</span>
+                <input
+                  type="tel"
+                  value={staffForm.phone}
+                  onChange={(e) => setStaffForm((f) => ({ ...f, phone: e.target.value }))}
+                  className={inputClass}
+                />
+              </label>
+              <label className="flex items-center gap-3">
+                <input
+                  type="checkbox"
+                  checked={staffForm.is_active}
+                  onChange={(e) => setStaffForm((f) => ({ ...f, is_active: e.target.checked }))}
+                  className="accent-[#0F6E56]"
+                />
+                <span className="text-sm font-semibold">Aktiv</span>
+              </label>
+              <div className="flex gap-3 pt-2">
+                <button
+                  type="button"
+                  onClick={closeStaffModal}
+                  disabled={staffSaving}
+                  className="flex-1 rounded-xl border border-[#C8E6D8] bg-[#EFF8F4] py-2.5 text-sm font-semibold text-[#4A6B5E] transition-colors hover:bg-[#C8E6D8] disabled:opacity-60"
+                >
+                  Avbryt
+                </button>
+                <button
+                  type="submit"
+                  disabled={staffSaving}
+                  className="flex-1 rounded-xl bg-[#0F6E56] py-2.5 text-sm font-bold text-white transition-colors hover:bg-[#0d5c48] disabled:opacity-60"
+                >
+                  {staffSaving ? "Lagrer…" : "Lagre"}
+                </button>
+              </div>
+            </form>
+          </div>
+        </div>
+      )}
+
+      {deleteStaffId !== null && (
+        <div
+          className="fixed inset-0 z-[60] flex items-center justify-center bg-black/60 p-4"
+          onClick={() => setDeleteStaffId(null)}
+        >
+          <div
+            className="w-full max-w-sm rounded-xl border border-[#C8E6D8] bg-white p-6 shadow-xl"
+            onClick={(e) => e.stopPropagation()}
+          >
+            <h2 className="mb-3 text-lg font-bold text-[#0F6E56]">Slett ansatt</h2>
+            <p className="mb-6 text-sm text-[#4A6B5E]">
+              Er du sikker på at du vil slette denne ansatte?
+            </p>
+            <div className="flex gap-3">
+              <button
+                type="button"
+                onClick={() => setDeleteStaffId(null)}
+                className="flex-1 rounded-xl border border-[#C8E6D8] bg-[#EFF8F4] py-2.5 text-sm font-semibold text-[#4A6B5E] transition-colors hover:bg-[#C8E6D8]"
+              >
+                Avbryt
+              </button>
+              <button
+                type="button"
+                onClick={confirmDeleteStaff}
+                className="flex-1 rounded-xl bg-[#dc2626] py-2.5 text-sm font-bold text-white transition-colors hover:bg-[#b91c1c]"
+              >
+                Slett
+              </button>
+            </div>
+          </div>
+        </div>
+      )}
+
+      {availabilityStaff !== null && (
+        <div
+          className="fixed inset-0 z-[60] flex items-center justify-center bg-black/60 p-4"
+          onClick={closeAvailabilityModal}
+        >
+          <div
+            className="w-full max-w-lg rounded-xl border border-[#C8E6D8] bg-white p-6 shadow-xl"
+            onClick={(e) => e.stopPropagation()}
+          >
+            <h2 className="mb-1 text-lg font-bold text-[#0F6E56]">Arbeidstider</h2>
+            <p className="mb-4 text-sm text-[#4A6B5E]">{availabilityStaff.name}</p>
+
+            {availabilityLoading ? (
+              <p className="py-8 text-center text-sm text-[#7A9A8E]">Laster…</p>
+            ) : (
+              <form onSubmit={saveAvailability} className="space-y-3">
+                <div className="max-h-[60vh] space-y-2 overflow-y-auto pr-1">
+                  {WEEKDAY_LABELS.map(({ day_of_week, label }) => {
+                    const row = availabilityForm.find((r) => r.day_of_week === day_of_week)!;
+                    return (
+                      <div
+                        key={day_of_week}
+                        className="flex flex-wrap items-center gap-3 rounded-lg border border-[#C8E6D8] bg-[#EFF8F4]/50 px-3 py-2.5"
+                      >
+                        <label className="flex min-w-[7rem] items-center gap-2">
+                          <input
+                            type="checkbox"
+                            checked={row.is_active}
+                            onChange={(e) =>
+                              updateAvailabilityDay(day_of_week, { is_active: e.target.checked })
+                            }
+                            className="accent-[#0F6E56]"
+                          />
+                          <span className="text-sm font-semibold text-[#0F6E56]">{label}</span>
+                        </label>
+                        <div className="flex flex-1 items-center gap-2">
+                          <input
+                            type="time"
+                            value={row.start_time.slice(0, 5)}
+                            disabled={!row.is_active}
+                            onChange={(e) =>
+                              updateAvailabilityDay(day_of_week, { start_time: e.target.value })
+                            }
+                            className="rounded-lg border border-[#C8E6D8] bg-white px-2 py-1.5 text-sm outline-none focus:border-[#0F6E56] disabled:opacity-50"
+                          />
+                          <span className="text-xs text-[#7A9A8E]">–</span>
+                          <input
+                            type="time"
+                            value={row.end_time.slice(0, 5)}
+                            disabled={!row.is_active}
+                            onChange={(e) =>
+                              updateAvailabilityDay(day_of_week, { end_time: e.target.value })
+                            }
+                            className="rounded-lg border border-[#C8E6D8] bg-white px-2 py-1.5 text-sm outline-none focus:border-[#0F6E56] disabled:opacity-50"
+                          />
+                        </div>
+                      </div>
+                    );
+                  })}
+                </div>
+                <div className="flex gap-3 pt-2">
+                  <button
+                    type="button"
+                    onClick={closeAvailabilityModal}
+                    disabled={availabilitySaving}
+                    className="flex-1 rounded-xl border border-[#C8E6D8] bg-[#EFF8F4] py-2.5 text-sm font-semibold text-[#4A6B5E] transition-colors hover:bg-[#C8E6D8] disabled:opacity-60"
+                  >
+                    Avbryt
+                  </button>
+                  <button
+                    type="submit"
+                    disabled={availabilitySaving}
+                    className="flex-1 rounded-xl bg-[#0F6E56] py-2.5 text-sm font-bold text-white transition-colors hover:bg-[#0d5c48] disabled:opacity-60"
+                  >
+                    {availabilitySaving ? "Lagrer…" : "Lagre"}
+                  </button>
+                </div>
+              </form>
+            )}
+          </div>
+        </div>
+      )}
+
       {recurringModal && (
         <RecurringModal
           bookingId={recurringModal.bookingId}
