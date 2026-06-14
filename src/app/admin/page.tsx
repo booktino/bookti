@@ -1,7 +1,7 @@
 "use client";
 import { BarChart, Bar, XAxis, YAxis, Tooltip, ResponsiveContainer, CartesianGrid } from "recharts";
 
-import { useEffect, useMemo, useState } from "react";
+import { useEffect, useMemo, useRef, useState } from "react";
 import { useRouter } from "next/navigation";
 import { Logo } from "@/components/Logo";
 import { no } from "@/i18n/no";
@@ -26,6 +26,7 @@ import {
   normalizeOrgNumber,
   normalizePostalCode,
 } from "@/lib/norway/business-fields";
+import { verifyOrgNumberWithBrreg } from "@/lib/norway/brreg";
 import { FREE_TRIAL_MONTHS } from "@/lib/pricing/plans";
 import { SLOT_INTERVAL_MIN } from "@/lib/availability";
 import {
@@ -989,6 +990,14 @@ export default function AdminPage() {
   const [settingsError, setSettingsError] = useState<string | null>(null);
   const [businessName, setBusinessName] = useState("");
   const [orgNumber, setOrgNumber] = useState("");
+  const [orgVerification, setOrgVerification] = useState<
+    | { status: "idle" }
+    | { status: "loading" }
+    | { status: "verified"; navn: string; orgForm: string }
+    | { status: "not_found" }
+  >({ status: "idle" });
+  const orgVerifyTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
+  const orgVerifyAbortRef = useRef<AbortController | null>(null);
   const [businessAddress, setBusinessAddress] = useState("");
   const [postalCode, setPostalCode] = useState("");
   const [businessCity, setBusinessCity] = useState("");
@@ -999,6 +1008,80 @@ export default function AdminPage() {
     defaultStartTime: string;
   } | null>(null);
   const [downloadingInvoiceId, setDownloadingInvoiceId] = useState<string | null>(null);
+
+  async function runOrgVerification(value: string) {
+    const normalized = normalizeOrgNumber(value);
+    if (normalized.length !== 9) {
+      setOrgVerification({ status: "idle" });
+      return;
+    }
+
+    orgVerifyAbortRef.current?.abort();
+    const controller = new AbortController();
+    orgVerifyAbortRef.current = controller;
+
+    setOrgVerification({ status: "loading" });
+
+    try {
+      const result = await verifyOrgNumberWithBrreg(normalized, controller.signal);
+      if (controller.signal.aborted || !result) return;
+
+      if (result.status === "verified") {
+        setOrgVerification({
+          status: "verified",
+          navn: result.navn,
+          orgForm: result.orgForm,
+        });
+        return;
+      }
+
+      if (result.status === "not_found") {
+        setOrgVerification({ status: "not_found" });
+        return;
+      }
+
+      setOrgVerification({ status: "idle" });
+    } catch {
+      // AbortError or unexpected failure — silent fail
+    }
+  }
+
+  function scheduleOrgVerification(value: string) {
+    if (orgVerifyTimerRef.current) {
+      clearTimeout(orgVerifyTimerRef.current);
+    }
+
+    const normalized = normalizeOrgNumber(value);
+    if (normalized.length !== 9) {
+      setOrgVerification({ status: "idle" });
+      return;
+    }
+
+    orgVerifyTimerRef.current = setTimeout(() => {
+      orgVerifyTimerRef.current = null;
+      void runOrgVerification(value);
+    }, 500);
+  }
+
+  function handleOrgNumberBlur() {
+    if (orgVerifyTimerRef.current) {
+      clearTimeout(orgVerifyTimerRef.current);
+      orgVerifyTimerRef.current = null;
+    }
+
+    if (normalizeOrgNumber(orgNumber).length === 9) {
+      void runOrgVerification(orgNumber);
+    }
+  }
+
+  useEffect(() => {
+    return () => {
+      if (orgVerifyTimerRef.current) {
+        clearTimeout(orgVerifyTimerRef.current);
+      }
+      orgVerifyAbortRef.current?.abort();
+    };
+  }, []);
 
   async function downloadInvoice(bookingId: string) {
     setDownloadingInvoiceId(bookingId);
@@ -2130,11 +2213,35 @@ export default function AdminPage() {
                       type="text"
                       inputMode="numeric"
                       value={orgNumber}
-                      onChange={(e) => setOrgNumber(normalizeOrgNumber(e.target.value))}
+                      onChange={(e) => {
+                        const next = normalizeOrgNumber(e.target.value);
+                        setOrgNumber(next);
+                        scheduleOrgVerification(next);
+                      }}
+                      onBlur={handleOrgNumberBlur}
                       placeholder="123456789"
                       maxLength={9}
                       className={inputClass}
                     />
+                    {orgVerification.status === "loading" && (
+                      <div className="mt-1.5 flex items-center gap-2 text-xs text-[#7A9A8E]">
+                        <span
+                          className="inline-block h-3 w-3 animate-spin rounded-full border-2 border-[#0F6E56] border-t-transparent"
+                          aria-hidden
+                        />
+                        Verifiserer organisasjonsnummer…
+                      </div>
+                    )}
+                    {orgVerification.status === "verified" && (
+                      <p className="mt-1.5 text-xs font-medium text-green-700">
+                        ✅ Verifisert: {orgVerification.navn} - {orgVerification.orgForm}
+                      </p>
+                    )}
+                    {orgVerification.status === "not_found" && (
+                      <p className="mt-1.5 text-xs font-medium text-red-600">
+                        ⚠️ Fant ikke dette organisasjonsnummeret i Brønnøysundregistrene
+                      </p>
+                    )}
                   </label>
                   <label className="block">
                     <span className="text-xs font-bold text-[#7A9A8E]">Adresse</span>
