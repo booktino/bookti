@@ -48,6 +48,18 @@ type BookingRow = Database["public"]["Tables"]["bookings"]["Row"] & {
   services: { name: string } | null;
 };
 
+type InvoiceRow = {
+  invoice_number: string;
+  created_at: string;
+  bookings: {
+    client_name: string;
+    client_phone: string;
+    price_nok: number | null;
+    salon_id: string;
+    services: { name: string } | null;
+  };
+};
+
 type CalendarBookingStatus = "kommende" | "ferdig" | "kansellert";
 
 type CalendarBooking = {
@@ -214,6 +226,94 @@ function formatSelectedDayLabel(dateStr: string) {
 function formatDateShort(iso: string) {
   const d = new Date(iso);
   return `${d.getDate()}. ${NORWEGIAN_MONTHS[d.getMonth()].slice(0, 3)}`;
+}
+
+function getInvoiceExportMonthOptions() {
+  const options: { value: string; label: string }[] = [];
+  const now = new Date();
+
+  for (let i = 0; i < 12; i++) {
+    const date = new Date(now.getFullYear(), now.getMonth() - i, 1);
+    const year = date.getFullYear();
+    const month = date.getMonth();
+    const value = `${year}-${String(month + 1).padStart(2, "0")}`;
+    const monthName = NORWEGIAN_MONTHS[month];
+    options.push({
+      value,
+      label: `${monthName.charAt(0).toUpperCase()}${monthName.slice(1)} ${year}`,
+    });
+  }
+
+  return options;
+}
+
+function getCurrentInvoiceExportMonth() {
+  const now = new Date();
+  return `${now.getFullYear()}-${String(now.getMonth() + 1).padStart(2, "0")}`;
+}
+
+function filterInvoicesByMonth(invoices: InvoiceRow[], monthValue: string) {
+  const [yearStr, monthStr] = monthValue.split("-");
+  const year = Number(yearStr);
+  const month = Number(monthStr) - 1;
+  const start = new Date(year, month, 1);
+  const end = new Date(year, month + 1, 0, 23, 59, 59, 999);
+
+  return invoices.filter((invoice) => {
+    const created = new Date(invoice.created_at);
+    return created >= start && created <= end;
+  });
+}
+
+function formatInvoiceCsvDate(iso: string) {
+  const date = new Date(iso);
+  return `${String(date.getDate()).padStart(2, "0")}.${String(date.getMonth() + 1).padStart(2, "0")}.${date.getFullYear()}`;
+}
+
+function escapeCsvField(value: string) {
+  if (/[;"\n\r]/.test(value)) {
+    return `"${value.replace(/"/g, '""')}"`;
+  }
+  return value;
+}
+
+function generateInvoicesCsv(rows: InvoiceRow[]) {
+  const headers = [
+    "Fakturanummer",
+    "Dato",
+    "Kundenavn",
+    "Telefon",
+    "Tjeneste",
+    "Beløp (NOK)",
+    "Status",
+  ];
+
+  const lines = rows.map((row) => {
+    const booking = row.bookings;
+    return [
+      escapeCsvField(row.invoice_number),
+      escapeCsvField(formatInvoiceCsvDate(row.created_at)),
+      escapeCsvField(booking.client_name),
+      escapeCsvField(booking.client_phone),
+      escapeCsvField(booking.services?.name ?? "—"),
+      String(booking.price_nok ?? 0),
+      "Betalt",
+    ].join(";");
+  });
+
+  return `\uFEFF${[headers.join(";"), ...lines].join("\r\n")}`;
+}
+
+function downloadCsvFile(content: string, filename: string) {
+  const blob = new Blob([content], { type: "text/csv;charset=utf-8;" });
+  const url = URL.createObjectURL(blob);
+  const link = document.createElement("a");
+  link.href = url;
+  link.download = filename;
+  document.body.appendChild(link);
+  link.click();
+  link.remove();
+  URL.revokeObjectURL(url);
 }
 
 const STATUS_STYLES: Record<CalendarBookingStatus, string> = {
@@ -1008,6 +1108,10 @@ export default function AdminPage() {
     defaultStartTime: string;
   } | null>(null);
   const [downloadingInvoiceId, setDownloadingInvoiceId] = useState<string | null>(null);
+  const [invoices, setInvoices] = useState<InvoiceRow[]>([]);
+  const [invoiceExportMonth, setInvoiceExportMonth] = useState(getCurrentInvoiceExportMonth);
+  const [exportingInvoicesCsv, setExportingInvoicesCsv] = useState(false);
+  const invoiceExportMonthOptions = useMemo(() => getInvoiceExportMonthOptions(), []);
 
   async function runOrgVerification(value: string) {
     const normalized = normalizeOrgNumber(value);
@@ -1083,6 +1187,22 @@ export default function AdminPage() {
     };
   }, []);
 
+  function exportInvoicesCsv() {
+    setExportingInvoicesCsv(true);
+    try {
+      const filtered = filterInvoicesByMonth(invoices, invoiceExportMonth);
+      const csv = generateInvoicesCsv(filtered);
+      const [yearStr, monthStr] = invoiceExportMonth.split("-");
+      const monthIndex = Number(monthStr) - 1;
+      const filename = `Bookti-fakturaer-${NORWEGIAN_MONTHS[monthIndex]}-${yearStr}.csv`;
+      downloadCsvFile(csv, filename);
+    } catch {
+      alert(no.common.error);
+    } finally {
+      setExportingInvoicesCsv(false);
+    }
+  }
+
   async function downloadInvoice(bookingId: string) {
     setDownloadingInvoiceId(bookingId);
     try {
@@ -1150,7 +1270,7 @@ export default function AdminPage() {
         return;
       }
 
-      const [bookingsRes, servicesRes, staffRes] = await Promise.all([
+      const [bookingsRes, servicesRes, staffRes, invoicesRes] = await Promise.all([
         supabase
           .from("bookings")
           .select("*, staff(name), services(name)")
@@ -1165,6 +1285,13 @@ export default function AdminPage() {
           .select("*")
           .eq("salon_id", salonData.id)
           .order("display_order"),
+        supabase
+          .from("invoices")
+          .select(
+            "invoice_number, created_at, bookings!inner(client_name, client_phone, price_nok, salon_id, services(name))",
+          )
+          .eq("bookings.salon_id", salonData.id)
+          .order("created_at", { ascending: false }),
       ]);
 
       if (cancelled) return;
@@ -1189,6 +1316,7 @@ export default function AdminPage() {
       setPostalCode(salonData.postal_code ?? "");
       setBusinessCity(salonData.city ?? "");
       setBookings((bookingsRes.data as BookingRow[] | null) ?? []);
+      setInvoices((invoicesRes.data as InvoiceRow[] | null) ?? []);
       setServices(servicesRes.data ?? []);
       setStaffList(staffRows);
       setStaffCount(staffRows.filter((s) => s.is_active).length);
@@ -2140,9 +2268,26 @@ export default function AdminPage() {
 
           {tab === "invoices" && (
             <>
-              <div className="mb-4 flex justify-end">
-                <button className="btn-primary rounded-lg px-4 py-2 text-xs font-bold text-white">
-                  {no.invoicing.altinnExport}
+              <div className="mb-4 flex flex-wrap items-center justify-end gap-2">
+                <select
+                  value={invoiceExportMonth}
+                  onChange={(e) => setInvoiceExportMonth(e.target.value)}
+                  aria-label={no.invoicing.exportPeriod}
+                  className="rounded-lg border border-[#C8E6D8] bg-white px-3 py-2 text-xs font-semibold text-[#0F6E56] outline-none focus:border-[#0F6E56] focus:ring-2 focus:ring-[#0F6E56]/20"
+                >
+                  {invoiceExportMonthOptions.map((option) => (
+                    <option key={option.value} value={option.value}>
+                      {option.label}
+                    </option>
+                  ))}
+                </select>
+                <button
+                  type="button"
+                  onClick={exportInvoicesCsv}
+                  disabled={exportingInvoicesCsv}
+                  className="btn-primary rounded-lg px-4 py-2 text-xs font-bold text-white disabled:opacity-50"
+                >
+                  {exportingInvoicesCsv ? no.common.loading : no.invoicing.altinnExport}
                 </button>
               </div>
               <div className="space-y-2">

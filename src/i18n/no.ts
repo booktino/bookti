@@ -76,7 +76,8 @@ export const no = {
     mva: "MVA",
     total: "Totalt å betale",
     dueDate: "Forfallsdato",
-    altinnExport: "Eksporter til Altinn",
+    altinnExport: "Eksporter til regnskap (CSV)",
+    exportPeriod: "Velg periode",
   },
   pricing: {
     flatSubscription: "Fast månedspris — 0 % provisjon",
