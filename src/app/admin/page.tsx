@@ -1,7 +1,7 @@
 "use client";
 import { BarChart, Bar, XAxis, YAxis, Tooltip, ResponsiveContainer, CartesianGrid } from "recharts";
 
-import { useEffect, useMemo, useRef, useState } from "react";
+import { useEffect, useMemo, useState } from "react";
 import { useRouter } from "next/navigation";
 import { Logo } from "@/components/Logo";
 import { no } from "@/i18n/no";
@@ -106,6 +106,7 @@ const NORWEGIAN_MONTHS = [
 ] as const;
 
 const WEEKDAYS = ["Man", "Tir", "Ons", "Tor", "Fre", "Lør", "Søn"] as const;
+const WEEKDAYS_UPPER = ["MAN", "TIR", "ONS", "TOR", "FRE", "LØR", "SØN"] as const;
 
 const SLOTS_PER_WEEKDAY = 8;
 
@@ -354,47 +355,75 @@ function slotConflictsWithPreview(
   return hasConflict(slotStart, slotEnd, others);
 }
 
-function UnavailableSlotPicker({
+function SlotDateTimePickerModal({
   bookingId,
+  staffId,
+  bookings,
   slotIndex,
-  durationMs,
-  slots,
-  initialDate,
+  slot,
+  allSlots,
   onSelect,
   onClose,
 }: {
   bookingId: string;
+  staffId: string;
+  bookings: BookingRow[];
   slotIndex: number;
-  durationMs: number;
-  slots: RecurringModalSlot[];
-  initialDate: string;
-  onSelect: (dateKey: string, time: string) => void;
+  slot: RecurringModalSlot;
+  allSlots: RecurringModalSlot[];
+  onSelect: (date: string, time: string) => void;
   onClose: () => void;
 }) {
-  const popupRef = useRef<HTMLDivElement>(null);
-  const [viewDate, setViewDate] = useState(() => {
-    const [y, m] = initialDate.split("-").map(Number);
-    return new Date(y, m - 1, 1);
-  });
+  const todayKey = getTodayKey();
+  const initialDate = new Date(slot.starts_at);
+  const [viewYear, setViewYear] = useState(initialDate.getFullYear());
+  const [viewMonth, setViewMonth] = useState(initialDate.getMonth());
   const [selectedDate, setSelectedDate] = useState<string | null>(null);
   const [timeSlots, setTimeSlots] = useState<RecurringTimeSlotAvailability[]>([]);
   const [loadingTimes, setLoadingTimes] = useState(false);
 
-  const viewYear = viewDate.getFullYear();
-  const viewMonth = viewDate.getMonth();
-  const cells = useMemo(() => getCalendarCells(viewYear, viewMonth), [viewYear, viewMonth]);
+  const calendarCells = useMemo(
+    () => getCalendarCells(viewYear, viewMonth),
+    [viewYear, viewMonth],
+  );
 
-  useEffect(() => {
-    function handleClickOutside(e: MouseEvent) {
-      if (popupRef.current && !popupRef.current.contains(e.target as Node)) {
-        onClose();
+  const staffBookingDates = useMemo(() => {
+    const dates = new Set<string>();
+    for (const b of bookings) {
+      if (b.staff_id !== staffId || b.status === "cancelled") continue;
+      const start = new Date(b.starts_at);
+      if (start.getFullYear() === viewYear && start.getMonth() === viewMonth) {
+        dates.add(dateKey(start.getFullYear(), start.getMonth(), start.getDate()));
       }
     }
-    document.addEventListener("mousedown", handleClickOutside);
-    return () => document.removeEventListener("mousedown", handleClickOutside);
-  }, [onClose]);
+    return dates;
+  }, [bookings, staffId, viewYear, viewMonth]);
 
-  async function handleDaySelect(day: number) {
+  function prevMonth() {
+    setViewMonth((m) => {
+      if (m === 0) {
+        setViewYear((y) => y - 1);
+        return 11;
+      }
+      return m - 1;
+    });
+    setSelectedDate(null);
+    setTimeSlots([]);
+  }
+
+  function nextMonth() {
+    setViewMonth((m) => {
+      if (m === 11) {
+        setViewYear((y) => y + 1);
+        return 0;
+      }
+      return m + 1;
+    });
+    setSelectedDate(null);
+    setTimeSlots([]);
+  }
+
+  async function selectDay(day: number) {
     const key = dateKey(viewYear, viewMonth, day);
     setSelectedDate(key);
     setLoadingTimes(true);
@@ -406,15 +435,7 @@ function UnavailableSlotPicker({
       const res = await fetch(`/api/bookings/recurring/preview?${params}`).then((r) =>
         r.json(),
       );
-      const apiSlots: RecurringTimeSlotAvailability[] = res.time_slots ?? [];
-      setTimeSlots(
-        apiSlots.map((slot) => ({
-          ...slot,
-          available:
-            slot.available &&
-            !slotConflictsWithPreview(key, slot.time, durationMs, slots, slotIndex),
-        })),
-      );
+      setTimeSlots(res.time_slots ?? []);
     } catch {
       setTimeSlots([]);
     } finally {
@@ -422,108 +443,171 @@ function UnavailableSlotPicker({
     }
   }
 
+  function isTimeAvailable(time: string): boolean {
+    const matched = timeSlots.find((s) => s.time === time);
+    if (!matched?.available) return false;
+    return !slotConflictsWithPreview(
+      selectedDate!,
+      time,
+      slot.durationMs,
+      allSlots,
+      slotIndex,
+    );
+  }
+
+  function handleTimeClick(time: string) {
+    if (!selectedDate || !isTimeAvailable(time)) return;
+    onSelect(selectedDate, time);
+  }
+
   return (
     <div
-      ref={popupRef}
-      className="absolute top-full right-0 z-50 mt-1 w-64 rounded-2xl border border-[#C8E6D8] bg-white p-3 shadow-xl"
-      onClick={(e) => e.stopPropagation()}
+      className="fixed inset-0 z-[60] flex items-center justify-center bg-black/60 p-4"
+      onClick={onClose}
     >
-      <div className="mb-2 flex items-center justify-between">
-        <button
-          type="button"
-          onClick={() => setViewDate((d) => new Date(d.getFullYear(), d.getMonth() - 1, 1))}
-          className="flex h-7 w-7 items-center justify-center rounded-lg border border-[#C8E6D8] text-[#0F6E56] hover:bg-[#d1f0e4]"
-          aria-label="Forrige måned"
-        >
-          ←
-        </button>
-        <span className="text-xs font-bold capitalize text-[#0F6E56]">
-          {NORWEGIAN_MONTHS[viewMonth]} {viewYear}
-        </span>
-        <button
-          type="button"
-          onClick={() => setViewDate((d) => new Date(d.getFullYear(), d.getMonth() + 1, 1))}
-          className="flex h-7 w-7 items-center justify-center rounded-lg border border-[#C8E6D8] text-[#0F6E56] hover:bg-[#d1f0e4]"
-          aria-label="Neste måned"
-        >
-          →
-        </button>
-      </div>
+      <div
+        className="w-full max-w-sm rounded-xl border border-[#C8E6D8] bg-white p-5 shadow-xl"
+        onClick={(e) => e.stopPropagation()}
+      >
+        <h3 className="mb-4 text-base font-bold text-[#0F6E56]">Velg ny dato og tid</h3>
 
-      <div className="mb-1 grid grid-cols-7 gap-0.5">
-        {WEEKDAYS.map((day) => (
-          <div
-            key={day}
-            className="py-1 text-center text-[9px] font-bold uppercase text-[#0F6E56]"
+        <div className="mb-3 flex items-center justify-between">
+          <button
+            type="button"
+            onClick={prevMonth}
+            className="flex h-8 w-8 items-center justify-center rounded-xl border border-[#C8E6D8] text-[#0F6E56] hover:bg-[#EFF8F4]"
+            aria-label="Forrige måned"
           >
-            {day}
-          </div>
-        ))}
-      </div>
+            ←
+          </button>
+          <span className="text-sm font-bold capitalize text-[#0F6E56]">
+            {NORWEGIAN_MONTHS[viewMonth]} {viewYear}
+          </span>
+          <button
+            type="button"
+            onClick={nextMonth}
+            className="flex h-8 w-8 items-center justify-center rounded-xl border border-[#C8E6D8] text-[#0F6E56] hover:bg-[#EFF8F4]"
+            aria-label="Neste måned"
+          >
+            →
+          </button>
+        </div>
 
-      <div className="grid grid-cols-7 gap-0.5">
-        {cells.map((day, idx) => {
-          if (day === null) {
-            return <div key={`empty-${idx}`} className="aspect-square" />;
-          }
-          const key = dateKey(viewYear, viewMonth, day);
-          const isSelected = key === selectedDate;
-          return (
-            <button
-              key={key}
-              type="button"
-              onClick={() => handleDaySelect(day)}
-              className={`flex aspect-square items-center justify-center rounded-lg border text-[11px] font-bold transition-colors ${
-                isSelected
-                  ? "border-[#0F6E56] bg-[#0F6E56] text-white"
-                  : "border-[#C8E6D8]/60 bg-white/60 text-[#1a3d30] hover:bg-[#d1f0e4]"
-              }`}
+        <div className="mb-1 grid grid-cols-7 gap-1">
+          {WEEKDAYS_UPPER.map((day) => (
+            <div
+              key={day}
+              className="py-1 text-center text-[10px] font-bold tracking-wide text-[#0F6E56]"
             >
               {day}
-            </button>
-          );
-        })}
-      </div>
-
-      {selectedDate && (
-        <div className="mt-3 border-t border-[#C8E6D8] pt-3">
-          <p className="mb-2 text-[10px] font-bold text-[#0F6E56]">
-            Velg tid — {formatSelectedDayLabel(selectedDate)}
-          </p>
-          {loadingTimes ? (
-            <p className="py-2 text-center text-[10px] text-[#7A9A8E]">Laster…</p>
-          ) : (
-            <div className="grid max-h-36 grid-cols-3 gap-1 overflow-y-auto">
-              {timeSlots.map(({ time, available }) => (
-                <button
-                  key={time}
-                  type="button"
-                  disabled={!available}
-                  onClick={() => onSelect(selectedDate, time)}
-                  className={`rounded-lg px-1 py-1.5 text-[10px] font-semibold transition-colors ${
-                    available
-                      ? "bg-[#0F6E56] text-white hover:bg-[#0d5c48]"
-                      : "cursor-not-allowed bg-[#f0f0f0] text-[#9ca3af]"
-                  }`}
-                >
-                  {time}
-                </button>
-              ))}
             </div>
-          )}
+          ))}
         </div>
-      )}
+
+        <div className="mb-4 grid grid-cols-7 gap-1">
+          {calendarCells.map((day, idx) => {
+            if (day === null) {
+              return <div key={`empty-${idx}`} className="aspect-square" />;
+            }
+            const key = dateKey(viewYear, viewMonth, day);
+            const isToday = key === todayKey;
+            const isSelected = key === selectedDate;
+            const hasStaffBookings = staffBookingDates.has(key);
+            return (
+              <button
+                key={key}
+                type="button"
+                onClick={() => selectDay(day)}
+                className={`flex aspect-square flex-col items-center justify-center rounded-xl border text-sm font-semibold transition-colors ${
+                  isSelected
+                    ? "border-[#0F6E56] bg-[#C8E6D8]/40 text-[#0F6E56] ring-2 ring-[#0F6E56] ring-offset-1"
+                    : isToday
+                      ? "border-[#0F6E56] bg-[#0F6E56] text-white"
+                      : hasStaffBookings
+                        ? "border-[#C8E6D8] bg-[#EFF8F4] text-[#1a3d30] hover:bg-[#C8E6D8]/50"
+                        : "border-[#C8E6D8] bg-white text-[#1a3d30] hover:bg-[#EFF8F4]"
+                }`}
+              >
+                <span>{day}</span>
+                {hasStaffBookings && (
+                  <span
+                    className={`mt-0.5 h-1 w-1 rounded-full ${
+                      isToday && !isSelected ? "bg-white" : "bg-[#0F6E56]"
+                    }`}
+                  />
+                )}
+              </button>
+            );
+          })}
+        </div>
+
+        {selectedDate && (
+          <div className="mb-4 border-t border-[#C8E6D8] pt-4">
+            <button
+              type="button"
+              onClick={() => {
+                setSelectedDate(null);
+                setTimeSlots([]);
+              }}
+              className="mb-3 text-xs font-semibold text-[#0F6E56] hover:underline"
+            >
+              ← Tilbake til kalender
+            </button>
+            <p className="mb-3 text-sm font-bold text-[#0F6E56]">
+              Velg tidspunkt for {formatSelectedDayLabel(selectedDate)}
+            </p>
+
+            {loadingTimes ? (
+              <p className="py-6 text-center text-sm text-[#7A9A8E]">Laster tider…</p>
+            ) : (
+              <div className="grid max-h-64 grid-cols-4 gap-2 overflow-y-auto">
+                {RECURRING_TIME_OPTIONS.map((time) => {
+                  const available = isTimeAvailable(time);
+                  return (
+                    <button
+                      key={time}
+                      type="button"
+                      onClick={() => handleTimeClick(time)}
+                      disabled={!available}
+                      className={`flex items-center justify-center gap-0.5 rounded-xl border px-1 py-2 text-xs font-semibold transition-colors ${
+                        available
+                          ? "border-[#0F6E56] bg-white text-[#0F6E56] hover:bg-[#EFF8F4]"
+                          : "cursor-not-allowed border-[#C8E6D8] bg-gray-100 text-gray-400 line-through"
+                      }`}
+                    >
+                      {!available && <span aria-hidden>🔒</span>}
+                      {time}
+                    </button>
+                  );
+                })}
+              </div>
+            )}
+          </div>
+        )}
+
+        <button
+          type="button"
+          onClick={onClose}
+          className="w-full rounded-xl border border-[#C8E6D8] bg-[#EFF8F4] py-2.5 text-sm font-semibold text-[#4A6B5E] transition-colors hover:bg-[#C8E6D8]"
+        >
+          Avbryt
+        </button>
+      </div>
     </div>
   );
 }
 
 function RecurringModal({
   bookingId,
+  staffId,
+  bookings,
   customerName,
   defaultStartTime,
   onClose,
 }: {
   bookingId: string;
+  staffId: string;
+  bookings: BookingRow[];
   customerName: string;
   defaultStartTime: string;
   onClose: () => void;
@@ -535,10 +619,7 @@ function RecurringModal({
   );
   const [occurrences, setOccurrences] = useState(8);
   const [slots, setSlots] = useState<RecurringModalSlot[]>([]);
-  const [editingIndex, setEditingIndex] = useState<number | null>(null);
-  const [editDate, setEditDate] = useState("");
-  const [editTime, setEditTime] = useState("");
-  const [pickerOpenIndex, setPickerOpenIndex] = useState<number | null>(null);
+  const [pickerSlotIndex, setPickerSlotIndex] = useState<number | null>(null);
   const [loadingPreview, setLoadingPreview] = useState(false);
   const [submitting, setSubmitting] = useState(false);
   const [success, setSuccess] = useState<{ created: number } | null>(null);
@@ -575,8 +656,7 @@ function RecurringModal({
       );
 
       setSlots(previewSlots);
-      setEditingIndex(null);
-      setPickerOpenIndex(null);
+      setPickerSlotIndex(null);
       setStep("preview");
     } catch {
       setError("Noe gikk galt.");
@@ -585,53 +665,11 @@ function RecurringModal({
     }
   }
 
-  function updateSlotTime(index: number, timeValue: string) {
-    setSlots((prev) =>
-      prev.map((slot, i) => {
-        if (i !== index) return slot;
-        const dateValue = toDateInputValue(slot.starts_at);
-        const newStart = applyDateAndTime(slot.starts_at, dateValue, timeValue);
-        const newEnd = new Date(new Date(newStart).getTime() + slot.durationMs).toISOString();
-        return {
-          ...slot,
-          starts_at: newStart,
-          ends_at: newEnd,
-          status: "available" as const,
-          rescheduled_to_time: null,
-          manuallyEdited: true,
-        };
-      }),
-    );
+  function openPicker(index: number) {
+    setPickerSlotIndex(index);
   }
 
-  function startEditing(index: number) {
-    const slot = slots[index];
-    setEditingIndex(index);
-    setEditDate(toDateInputValue(slot.starts_at));
-    setEditTime(toTimeInputValue(slot.starts_at));
-  }
-
-  function saveEditing() {
-    if (editingIndex === null) return;
-    setSlots((prev) =>
-      prev.map((slot, i) => {
-        if (i !== editingIndex) return slot;
-        const newStart = applyDateAndTime(slot.starts_at, editDate, editTime);
-        const newEnd = new Date(new Date(newStart).getTime() + slot.durationMs).toISOString();
-        return {
-          ...slot,
-          starts_at: newStart,
-          ends_at: newEnd,
-          status: "available" as const,
-          rescheduled_to_time: null,
-          manuallyEdited: true,
-        };
-      }),
-    );
-    setEditingIndex(null);
-  }
-
-  function selectManualSlot(index: number, dateValue: string, timeValue: string) {
+  function applySlotSelection(index: number, dateValue: string, timeValue: string) {
     setSlots((prev) =>
       prev.map((slot, i) => {
         if (i !== index) return slot;
@@ -647,7 +685,7 @@ function RecurringModal({
         };
       }),
     );
-    setPickerOpenIndex(null);
+    setPickerSlotIndex(null);
   }
 
   async function handleConfirm() {
@@ -713,11 +751,7 @@ function RecurringModal({
               {confirmableSlots.length} av {slots.length} timer kan opprettes
             </p>
 
-            <div
-              className={`mb-4 max-h-80 rounded-xl border border-[#C8E6D8] ${
-                pickerOpenIndex !== null ? "overflow-visible" : "overflow-auto"
-              }`}
-            >
+            <div className="mb-4 max-h-80 overflow-auto rounded-xl border border-[#C8E6D8]">
               <table className="w-full text-sm">
                 <thead className="sticky top-0 bg-[#f0faf6]">
                   <tr className="border-b border-[#C8E6D8] text-left text-xs text-[#0F6E56]">
@@ -736,34 +770,10 @@ function RecurringModal({
                       }`}
                     >
                       <td className="px-3 py-2 text-[#1a3d30]">
-                        {editingIndex === index ? (
-                          <input
-                            type="date"
-                            value={editDate}
-                            onChange={(e) => setEditDate(e.target.value)}
-                            className="w-full rounded-lg border border-[#C8E6D8] px-2 py-1 text-xs outline-none focus:border-[#0F6E56]"
-                          />
-                        ) : (
-                          formatRecurringDateLabel(new Date(slot.starts_at))
-                        )}
+                        {formatRecurringDateLabel(new Date(slot.starts_at))}
                       </td>
-                      <td className="px-3 py-2">
-                        {editingIndex === index ? (
-                          <input
-                            type="time"
-                            value={editTime}
-                            onChange={(e) => setEditTime(e.target.value)}
-                            className="w-full rounded-lg border border-[#C8E6D8] px-2 py-1 text-xs outline-none focus:border-[#0F6E56]"
-                          />
-                        ) : (
-                          <input
-                            type="time"
-                            value={toTimeInputValue(slot.starts_at)}
-                            onChange={(e) => updateSlotTime(index, e.target.value)}
-                            disabled={isSlotUnavailable(slot)}
-                            className="rounded-lg border border-[#C8E6D8] px-2 py-1 text-xs outline-none focus:border-[#0F6E56] disabled:cursor-not-allowed disabled:opacity-60"
-                          />
-                        )}
+                      <td className="px-3 py-2 font-mono text-[#1a3d30]">
+                        {toTimeInputValue(slot.starts_at)}
                       </td>
                       <td className="px-3 py-2 text-xs">
                         <span
@@ -782,20 +792,10 @@ function RecurringModal({
                         </span>
                       </td>
                       <td className="relative px-3 py-2 text-right">
-                        {editingIndex === index ? (
+                        {isSlotUnavailable(slot) ? (
                           <button
                             type="button"
-                            onClick={saveEditing}
-                            className="rounded-lg border border-[#0F6E56] px-2 py-1 text-xs font-semibold text-[#0F6E56] hover:bg-[#EFF8F4]"
-                          >
-                            Lagre
-                          </button>
-                        ) : isSlotUnavailable(slot) ? (
-                          <button
-                            type="button"
-                            onClick={() =>
-                              setPickerOpenIndex(pickerOpenIndex === index ? null : index)
-                            }
+                            onClick={() => openPicker(index)}
                             className="rounded-lg border border-[#0F6E56] bg-[#EFF8F4] px-2 py-1 text-xs font-semibold text-[#0F6E56] hover:bg-[#d1f0e4]"
                           >
                             Velg dato
@@ -803,23 +803,12 @@ function RecurringModal({
                         ) : (
                           <button
                             type="button"
-                            onClick={() => startEditing(index)}
+                            onClick={() => openPicker(index)}
                             className="rounded-lg border border-[#C8E6D8] px-2 py-1 text-xs hover:bg-[#EFF8F4]"
                             title="Endre dato og tid"
                           >
                             ✏️
                           </button>
-                        )}
-                        {pickerOpenIndex === index && (
-                          <UnavailableSlotPicker
-                            bookingId={bookingId}
-                            slotIndex={index}
-                            durationMs={slot.durationMs}
-                            slots={slots}
-                            initialDate={toDateInputValue(slot.starts_at)}
-                            onSelect={(dateKey, time) => selectManualSlot(index, dateKey, time)}
-                            onClose={() => setPickerOpenIndex(null)}
-                          />
                         )}
                       </td>
                     </tr>
@@ -840,8 +829,7 @@ function RecurringModal({
                 onClick={() => {
                   setStep("configure");
                   setError(null);
-                  setEditingIndex(null);
-                  setPickerOpenIndex(null);
+                  setPickerSlotIndex(null);
                 }}
                 disabled={submitting}
                 className="flex-1 rounded-xl border border-[#C8E6D8] bg-[#EFF8F4] py-2.5 text-sm font-semibold text-[#4A6B5E] transition-colors hover:bg-[#C8E6D8] disabled:opacity-60"
@@ -940,6 +928,19 @@ function RecurringModal({
           </>
         )}
       </div>
+
+      {pickerSlotIndex !== null && (
+        <SlotDateTimePickerModal
+          bookingId={bookingId}
+          staffId={staffId}
+          bookings={bookings}
+          slotIndex={pickerSlotIndex}
+          slot={slots[pickerSlotIndex]}
+          allSlots={slots}
+          onSelect={(date, time) => applySlotSelection(pickerSlotIndex, date, time)}
+          onClose={() => setPickerSlotIndex(null)}
+        />
+      )}
     </div>
   );
 }
@@ -989,6 +990,7 @@ export default function AdminPage() {
   const [settingsSaved, setSettingsSaved] = useState(false);
   const [recurringModal, setRecurringModal] = useState<{
     bookingId: string;
+    staffId: string;
     customerName: string;
     defaultStartTime: string;
   } | null>(null);
@@ -1743,13 +1745,16 @@ export default function AdminPage() {
                                 {b.status === "kommende" && (
                                   <>
                                   <button
-                                    onClick={() =>
+                                    onClick={() => {
+                                      const row = bookings.find((bk) => bk.id === b.id);
+                                      if (!row?.staff_id) return;
                                       setRecurringModal({
                                         bookingId: b.id,
+                                        staffId: row.staff_id,
                                         customerName: b.customerName,
                                         defaultStartTime: b.time,
-                                      })
-                                    }
+                                      });
+                                    }}
                                     className="mt-2 w-full rounded-lg border border-[#C8E6D8] bg-[#EFF8F4] py-1 text-xs font-semibold text-[#0F6E56] hover:bg-[#d1f0e4] transition-colors"
                                   >
                                     🔁 Gjenta time
@@ -2202,6 +2207,8 @@ export default function AdminPage() {
       {recurringModal && (
         <RecurringModal
           bookingId={recurringModal.bookingId}
+          staffId={recurringModal.staffId}
+          bookings={bookings}
           customerName={recurringModal.customerName}
           defaultStartTime={recurringModal.defaultStartTime}
           onClose={() => setRecurringModal(null)}
