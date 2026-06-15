@@ -51,8 +51,38 @@ function randomSuffix(length = 4): string {
   ).join("");
 }
 
-function buildSlug(businessName: string): string {
+type SupabaseClient = ReturnType<typeof createClient>;
+
+async function isSlugTaken(
+  supabase: SupabaseClient,
+  slug: string
+): Promise<boolean> {
+  const { data } = await supabase
+    .from("salons")
+    .select("slug")
+    .eq("slug", slug)
+    .maybeSingle();
+
+  return data !== null;
+}
+
+async function buildSlug(
+  supabase: SupabaseClient,
+  businessName: string
+): Promise<string> {
   const base = slugify(businessName) || "bedrift";
+
+  if (!(await isSlugTaken(supabase, base))) {
+    return base;
+  }
+
+  for (let i = 2; i <= 51; i++) {
+    const candidate = `${base}-${i}`;
+    if (!(await isSlugTaken(supabase, candidate))) {
+      return candidate;
+    }
+  }
+
   return `${base}-${randomSuffix(4)}`;
 }
 
@@ -63,7 +93,6 @@ function trialEndsAt(): string {
 }
 
 type SalonInsert = Database["public"]["Tables"]["salons"]["Insert"];
-type SupabaseClient = ReturnType<typeof createClient>;
 
 type SalonFormData = {
   businessName: string;
@@ -85,7 +114,7 @@ async function createSalon(
     owner_id: ownerId,
     invoice_start_number: null,
     name: form.businessName.trim(),
-    slug: buildSlug(form.businessName),
+    slug: await buildSlug(supabase, form.businessName),
     phone: form.phone.trim(),
     address: form.address.trim(),
     city: form.city.trim() || "Bergen",
