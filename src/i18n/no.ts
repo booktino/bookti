@@ -88,10 +88,9 @@ export const no = {
   },
   features: {
     onlineBooking: "Online booking 24/7",
-    vipps: "Vipps-betaling",
-    mvaAltinn: "MVA-faktura + Altinn",
+    invoicing: "PDF-fakturaer",
     smsReminders: "SMS-påminnelser",
-    flatPrice: "299–399 kr/mnd",
+    flatPrice: "299 kr/mnd",
     builtForNorway: "Bygget for Norge",
   },
 } as const;

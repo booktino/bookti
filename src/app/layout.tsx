@@ -20,7 +20,7 @@ export const viewport: Viewport = {
 export const metadata: Metadata = {
   title: "Bookti — Smart booking for norske servicebedrifter",
   description:
-    "Online booking, Vipps-betaling, MVA-fakturaer og Altinn-rapporter. 6 måneder gratis — deretter 299–399 kr/mnd.",
+    "Online booking, SMS-påminnelser og MVA-fakturaer for norske bedrifter. 6 måneder gratis — deretter 299 kr/mnd.",
 };
 
 export default function RootLayout({

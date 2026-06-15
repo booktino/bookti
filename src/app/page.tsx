@@ -135,7 +135,7 @@ export default function ComingSoon() {
 
         <div style={{ position:"relative",zIndex:5,maxWidth:820,margin:"0 auto",padding:"0 20px 20px" }}>
           <div className="bookti-features" style={{ display:"flex",flexWrap:"wrap",justifyContent:"center",gap:8 }}>
-            {["🎁 6 måneder gratis","📅 Online booking 24/7","📲 SMS-påminnelser","💚 Vipps-betaling","🧾 MVA + Altinn","💰 299–399 kr/mnd","🇳🇴 Bygget for Norge"].map((f) => (
+            {["🎁 6 måneder gratis","📅 Online booking 24/7","📲 SMS-påminnelser","🧾 PDF-fakturaer","💰 299 kr/mnd","🇳🇴 Bygget for Norge"].map((f) => (
               <div key={f} className="bookti-feature" style={{ padding:"7px 16px",borderRadius:20,background:C.surface,border:`1px solid ${C.border}`,fontSize:12,color:C.muted,boxShadow:"0 1px 2px rgba(15,110,86,0.04)" }}>{f}</div>
             ))}
           </div>

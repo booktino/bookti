@@ -21,21 +21,7 @@ export const PLANS: PlanDetails[] = [
       "Ubegrenset antall bookinger",
       "Online bookingside",
       "SMS-påminnelser på norsk",
-      "Vipps-betaling",
-      "0 % provisjon på bookinger",
-    ],
-  },
-  {
-    id: "pro",
-    name: "Pro",
-    priceNok: 399,
-    description: "For voksende bedrifter med fakturering og Altinn.",
-    features: [
-      "Alt i Starter",
-      "MVA-fakturaer",
-      "Altinn MVA-rapport",
-      "Push-varsler til eier",
-      "Prioritert norsk support",
+      "Fakturering med PDF og CSV-eksport",
     ],
   },
 ];
