@@ -46,6 +46,7 @@ import {
   type CustomerPackage,
   type PackageUnitType,
 } from "@/lib/packages/customer-packages";
+import { getServiceIcon } from "@/lib/business-types";
 
 type AdminTab = "calendar" | "services" | "staff" | "clients" | "invoices" | "settings" | "reviews" | "statistikk";
 
@@ -338,9 +339,14 @@ const STATUS_LABELS: Record<CalendarBookingStatus, string> = {
   kansellert: "Kansellert",
 };
 
+function adminTabIcon(tabId: AdminTab, businessType: string | null | undefined): string {
+  if (tabId === "services") return getServiceIcon(businessType);
+  return TABS.find((t) => t.id === tabId)?.icon ?? "📋";
+}
+
 const TABS: { id: AdminTab; label: string; icon: string }[] = [
   { id: "calendar", label: no.admin.calendar, icon: "📅" },
-  { id: "services", label: no.admin.services, icon: "✂️" },
+  { id: "services", label: no.admin.services, icon: "📋" },
   { id: "staff", label: no.admin.staff, icon: "👤" },
   { id: "clients", label: no.admin.clients, icon: "👥" },
   { id: "invoices", label: no.admin.invoices, icon: "🧾" },
@@ -2880,7 +2886,7 @@ export default function AdminPage() {
                   : "text-white hover:bg-white/15"
               }`}
             >
-              <span>{t.icon}</span> {t.label}
+              <span>{adminTabIcon(t.id, salon.business_type)}</span> {t.label}
             </button>
           ))}
         </nav>
@@ -2893,7 +2899,7 @@ export default function AdminPage() {
       <main className="flex-1 overflow-auto">
         <header className="flex items-center justify-between border-b border-[#5DCAA5] bg-white px-8 py-4">
           <h1 className="text-lg font-bold text-[#0F6E56]">
-            {TABS.find((t) => t.id === tab)?.icon}{" "}
+            {adminTabIcon(tab, salon.business_type)}{" "}
             {TABS.find((t) => t.id === tab)?.label}
           </h1>
           <a

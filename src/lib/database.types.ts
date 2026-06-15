@@ -29,6 +29,7 @@ export interface Database {
           address: string | null
           city: string
           business_name: string | null
+          business_type: string | null
           org_number: string | null
           postal_code: string | null
           invoice_start_number: number | null

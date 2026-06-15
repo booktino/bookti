@@ -97,6 +97,7 @@ type SalonInsert = Database["public"]["Tables"]["salons"]["Insert"];
 type SalonFormData = {
   businessName: string;
   invoiceBusinessName: string;
+  businessType: string;
   orgNumber: string;
   email: string;
   phone: string;
@@ -119,6 +120,7 @@ async function createSalon(
     address: form.address.trim(),
     city: form.city.trim() || "Bergen",
     business_name: form.invoiceBusinessName.trim() || null,
+    business_type: form.businessType,
     org_number: normalizeOrgNumber(form.orgNumber) || null,
     postal_code: normalizePostalCode(form.postalCode) || null,
     email: form.email.trim(),
@@ -261,6 +263,7 @@ export default function RegisterPage() {
     const { error: salonError } = await createSalon(supabase, userId, {
       businessName,
       invoiceBusinessName,
+      businessType,
       orgNumber,
       email,
       phone,
