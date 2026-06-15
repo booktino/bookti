@@ -1,7 +1,7 @@
 "use client";
 import { BarChart, Bar, XAxis, YAxis, Tooltip, ResponsiveContainer, CartesianGrid } from "recharts";
 
-import { useEffect, useMemo, useRef, useState } from "react";
+import { useEffect, useMemo, useRef, useState, type FormEvent } from "react";
 import { useRouter } from "next/navigation";
 import { Logo } from "@/components/Logo";
 import { no } from "@/i18n/no";
@@ -37,6 +37,15 @@ import {
   type RecurringPreviewSlot,
   type RecurringTimeSlotAvailability,
 } from "@/lib/bookings/recurring";
+import {
+  addOneYearIsoDate,
+  formatPackageBookingLabel,
+  formatPackageRemaining,
+  getEligiblePackagesForBooking,
+  getPackageStatus,
+  type CustomerPackage,
+  type PackageUnitType,
+} from "@/lib/packages/customer-packages";
 
 type AdminTab = "calendar" | "services" | "staff" | "clients" | "invoices" | "settings" | "reviews" | "statistikk";
 
@@ -412,6 +421,8 @@ type ManualBookingForm = {
   date: string;
   time: string;
   notes: string;
+  usePackageId: string;
+  setPriceToZero: boolean;
 };
 
 const EMPTY_MANUAL_BOOKING_FORM: ManualBookingForm = {
@@ -423,7 +434,52 @@ const EMPTY_MANUAL_BOOKING_FORM: ManualBookingForm = {
   date: "",
   time: "09:00",
   notes: "",
+  usePackageId: "",
+  setPriceToZero: false,
 };
+
+type NewPackageForm = {
+  unitType: PackageUnitType;
+  name: string;
+  totalCredits: string;
+  serviceId: string;
+  expiresAt: string;
+  notes: string;
+};
+
+function emptyNewPackageForm(unitType: PackageUnitType = "visits"): NewPackageForm {
+  return {
+    unitType,
+    name: "",
+    totalCredits: "",
+    serviceId: "",
+    expiresAt: addOneYearIsoDate(),
+    notes: "",
+  };
+}
+
+function PackageStatusBadge({ pkg }: { pkg: CustomerPackage }) {
+  const status = getPackageStatus(pkg);
+  if (status === "utlopt") {
+    return (
+      <span className="rounded-full bg-[#fee2e2] px-2.5 py-0.5 text-[10px] font-bold text-[#dc2626]">
+        Utløpt
+      </span>
+    );
+  }
+  if (status === "brukt_opp") {
+    return (
+      <span className="rounded-full bg-[#e2f5ee] px-2.5 py-0.5 text-[10px] font-bold text-[#7A9A8E]">
+        Brukt opp
+      </span>
+    );
+  }
+  return (
+    <span className="rounded-full bg-[#0F6E56]/10 px-2.5 py-0.5 text-[10px] font-bold text-[#0F6E56]">
+      Aktiv
+    </span>
+  );
+}
 
 function isNorwegianPhoneValid(phone: string): boolean {
   const digits = phone.replace(/\D/g, "");
@@ -788,10 +844,184 @@ function SlotDateTimePickerModal({
   );
 }
 
+function NewPackageModal({
+  form,
+  services,
+  saving,
+  error,
+  onChange,
+  onSave,
+  onClose,
+}: {
+  form: NewPackageForm;
+  services: Service[];
+  saving: boolean;
+  error: string | null;
+  onChange: (patch: Partial<NewPackageForm>) => void;
+  onSave: (e: FormEvent) => void;
+  onClose: () => void;
+}) {
+  const isVisits = form.unitType === "visits";
+  const activeServices = services.filter((s) => s.is_active);
+
+  return (
+    <div
+      className="fixed inset-0 z-[60] flex items-center justify-center bg-black/60 p-4"
+      onClick={onClose}
+    >
+      <div
+        className="max-h-[90vh] w-full max-w-md overflow-y-auto rounded-2xl bg-white p-6 shadow-xl"
+        onClick={(e) => e.stopPropagation()}
+      >
+        <h2 className="mb-4 text-lg font-bold text-[#0F6E56]">Nytt pakke</h2>
+        <form onSubmit={onSave} className="space-y-4">
+          <div className="flex rounded-xl border border-[#C8E6D8] p-1">
+            <button
+              type="button"
+              onClick={() =>
+                onChange({
+                  unitType: "visits",
+                  name: "",
+                  serviceId: form.serviceId,
+                })
+              }
+              className={`flex-1 rounded-lg px-3 py-2 text-xs font-bold transition-colors ${
+                isVisits
+                  ? "bg-[#0F6E56] text-white"
+                  : "text-[#4A6B5E] hover:bg-[#EFF8F4]"
+              }`}
+            >
+              Klippekort (antall besøk)
+            </button>
+            <button
+              type="button"
+              onClick={() =>
+                onChange({
+                  unitType: "amount",
+                  name: "",
+                  serviceId: "",
+                })
+              }
+              className={`flex-1 rounded-lg px-3 py-2 text-xs font-bold transition-colors ${
+                !isVisits
+                  ? "bg-[#0F6E56] text-white"
+                  : "text-[#4A6B5E] hover:bg-[#EFF8F4]"
+              }`}
+            >
+              Gavekort (kronebeløp)
+            </button>
+          </div>
+
+          <label className="block">
+            <span className="text-xs font-bold text-[#7A9A8E]">Navn *</span>
+            <input
+              type="text"
+              required
+              value={form.name}
+              onChange={(e) => onChange({ name: e.target.value })}
+              placeholder={isVisits ? "Massasje 10x" : "Gavekort 1000 kr"}
+              className={inputClass}
+            />
+          </label>
+
+          <label className="block">
+            <span className="text-xs font-bold text-[#7A9A8E]">
+              {isVisits ? "Antall *" : "Beløp *"}
+            </span>
+            <div className="mt-1 flex items-center gap-2">
+              <input
+                type="number"
+                required
+                min={1}
+                value={form.totalCredits}
+                onChange={(e) => onChange({ totalCredits: e.target.value })}
+                className={`${inputClass} mt-0 flex-1`}
+              />
+              <span className="text-sm font-bold text-[#7A9A8E]">
+                {isVisits ? "besøk" : "kr"}
+              </span>
+            </div>
+          </label>
+
+          <label className="block">
+            <span className="text-xs font-bold text-[#7A9A8E]">Tjeneste</span>
+            {isVisits ? (
+              <select
+                value={form.serviceId}
+                onChange={(e) => onChange({ serviceId: e.target.value })}
+                className={inputClass}
+              >
+                <option value="">Alle tjenester</option>
+                {activeServices.map((service) => (
+                  <option key={service.id} value={service.id}>
+                    {service.name}
+                  </option>
+                ))}
+              </select>
+            ) : (
+              <input
+                type="text"
+                disabled
+                value="Alle tjenester"
+                className={`${inputClass} bg-[#EFF8F4] text-[#7A9A8E]`}
+              />
+            )}
+          </label>
+
+          <label className="block">
+            <span className="text-xs font-bold text-[#7A9A8E]">Utløpsdato</span>
+            <input
+              type="date"
+              value={form.expiresAt}
+              onChange={(e) => onChange({ expiresAt: e.target.value })}
+              className={inputClass}
+            />
+          </label>
+
+          <label className="block">
+            <span className="text-xs font-bold text-[#7A9A8E]">Notater</span>
+            <textarea
+              rows={3}
+              value={form.notes}
+              onChange={(e) => onChange({ notes: e.target.value })}
+              className={inputClass}
+            />
+          </label>
+
+          {error && (
+            <p className="rounded-lg border border-red-200 bg-red-50 px-3 py-2 text-sm text-red-600">
+              {error}
+            </p>
+          )}
+
+          <div className="flex gap-3 pt-2">
+            <button
+              type="button"
+              onClick={onClose}
+              disabled={saving}
+              className="flex-1 rounded-xl border border-[#C8E6D8] bg-[#EFF8F4] py-2.5 text-sm font-semibold text-[#4A6B5E] transition-colors hover:bg-[#C8E6D8] disabled:opacity-60"
+            >
+              Avbryt
+            </button>
+            <button
+              type="submit"
+              disabled={saving}
+              className="flex-1 rounded-xl bg-[#0F6E56] py-2.5 text-sm font-bold text-white transition-colors hover:bg-[#0d5c48] disabled:opacity-60"
+            >
+              {saving ? "Lagrer…" : "Lagre"}
+            </button>
+          </div>
+        </form>
+      </div>
+    </div>
+  );
+}
+
 function ManualBookingModal({
   form,
   services,
   staffList,
+  customerPackages,
   saving,
   error,
   onChange,
@@ -801,14 +1031,39 @@ function ManualBookingModal({
   form: ManualBookingForm;
   services: Service[];
   staffList: Staff[];
+  customerPackages: CustomerPackage[];
   saving: boolean;
   error: string | null;
   onChange: (patch: Partial<ManualBookingForm>) => void;
-  onSave: (e: React.FormEvent) => void;
+  onSave: (e: FormEvent) => void;
   onClose: () => void;
 }) {
   const activeServices = services.filter((s) => s.is_active);
   const activeStaff = staffList.filter((s) => s.is_active);
+  const selectedService = activeServices.find((s) => s.id === form.serviceId);
+  const normalizedPhone = isNorwegianPhoneValid(form.clientPhone)
+    ? formatNorwegianPhone(form.clientPhone)
+    : null;
+
+  const eligiblePackages = useMemo(() => {
+    if (!normalizedPhone || !selectedService) return [];
+    return getEligiblePackagesForBooking(
+      customerPackages,
+      normalizedPhone,
+      selectedService.id,
+      selectedService.price_nok,
+    );
+  }, [customerPackages, normalizedPhone, selectedService]);
+
+  function handleFieldChange(patch: Partial<ManualBookingForm>) {
+    const resetsPackage =
+      "clientPhone" in patch || "serviceId" in patch;
+    if (resetsPackage) {
+      onChange({ ...patch, usePackageId: "", setPriceToZero: false });
+      return;
+    }
+    onChange(patch);
+  }
 
   return (
     <div
@@ -827,7 +1082,7 @@ function ManualBookingModal({
               type="text"
               required
               value={form.clientName}
-              onChange={(e) => onChange({ clientName: e.target.value })}
+              onChange={(e) => handleFieldChange({ clientName: e.target.value })}
               className={inputClass}
             />
           </label>
@@ -839,7 +1094,7 @@ function ManualBookingModal({
                 type="tel"
                 required
                 value={form.clientPhone}
-                onChange={(e) => onChange({ clientPhone: e.target.value })}
+                onChange={(e) => handleFieldChange({ clientPhone: e.target.value })}
                 placeholder="12345678"
                 className={`${inputClass} mt-0 flex-1`}
               />
@@ -850,7 +1105,7 @@ function ManualBookingModal({
             <input
               type="email"
               value={form.clientEmail}
-              onChange={(e) => onChange({ clientEmail: e.target.value })}
+              onChange={(e) => handleFieldChange({ clientEmail: e.target.value })}
               className={inputClass}
             />
           </label>
@@ -859,7 +1114,7 @@ function ManualBookingModal({
             <select
               required
               value={form.serviceId}
-              onChange={(e) => onChange({ serviceId: e.target.value })}
+              onChange={(e) => handleFieldChange({ serviceId: e.target.value })}
               className={inputClass}
             >
               <option value="" disabled>
@@ -877,7 +1132,7 @@ function ManualBookingModal({
             <select
               required
               value={form.staffId}
-              onChange={(e) => onChange({ staffId: e.target.value })}
+              onChange={(e) => handleFieldChange({ staffId: e.target.value })}
               className={inputClass}
             >
               <option value="" disabled>
@@ -897,7 +1152,7 @@ function ManualBookingModal({
                 type="date"
                 required
                 value={form.date}
-                onChange={(e) => onChange({ date: e.target.value })}
+                onChange={(e) => handleFieldChange({ date: e.target.value })}
                 className={inputClass}
               />
             </label>
@@ -906,7 +1161,7 @@ function ManualBookingModal({
               <select
                 required
                 value={form.time}
-                onChange={(e) => onChange({ time: e.target.value })}
+                onChange={(e) => handleFieldChange({ time: e.target.value })}
                 className={inputClass}
               >
                 {MANUAL_BOOKING_TIME_OPTIONS.map((time) => (
@@ -922,10 +1177,81 @@ function ManualBookingModal({
             <textarea
               rows={3}
               value={form.notes}
-              onChange={(e) => onChange({ notes: e.target.value })}
+              onChange={(e) => handleFieldChange({ notes: e.target.value })}
               className={inputClass}
             />
           </label>
+          {eligiblePackages.length > 0 && (
+            <fieldset className="rounded-xl border border-[#C8E6D8] bg-[#EFF8F4] p-4">
+              <legend className="px-1 text-xs font-bold text-[#0F6E56]">Bruk fra pakke</legend>
+              <div className="space-y-2">
+                {eligiblePackages.map(({ pkg, selectable, insufficientBalance }) => (
+                  <label
+                    key={pkg.id}
+                    className={`flex items-start gap-3 rounded-lg border px-3 py-2 text-sm ${
+                      selectable
+                        ? "cursor-pointer border-[#C8E6D8] bg-white"
+                        : "cursor-not-allowed border-[#C8E6D8] bg-gray-50 opacity-60"
+                    }`}
+                  >
+                    <input
+                      type="radio"
+                      name="usePackageId"
+                      value={pkg.id}
+                      checked={form.usePackageId === pkg.id}
+                      disabled={!selectable}
+                      onChange={() =>
+                        onChange({
+                          usePackageId: pkg.id,
+                          setPriceToZero: false,
+                        })
+                      }
+                      className="mt-0.5 accent-[#0F6E56]"
+                    />
+                    <span className={selectable ? "text-[#4A6B5E]" : "text-[#7A9A8E]"}>
+                      {formatPackageBookingLabel(
+                        pkg,
+                        selectedService?.price_nok ?? 0,
+                      )}
+                      {insufficientBalance && (
+                        <span className="mt-0.5 block text-xs font-semibold text-[#dc2626]">
+                          Ikke nok saldo
+                        </span>
+                      )}
+                    </span>
+                  </label>
+                ))}
+                <label className="flex items-center gap-3 rounded-lg border border-[#C8E6D8] bg-white px-3 py-2 text-sm">
+                  <input
+                    type="radio"
+                    name="usePackageId"
+                    value=""
+                    checked={!form.usePackageId}
+                    onChange={() =>
+                      onChange({ usePackageId: "", setPriceToZero: false })
+                    }
+                    className="accent-[#0F6E56]"
+                  />
+                  <span className="text-[#4A6B5E]">Ikke bruk pakke</span>
+                </label>
+              </div>
+              {form.usePackageId && (
+                <label className="mt-3 flex items-start gap-3 text-sm">
+                  <input
+                    type="checkbox"
+                    checked={form.setPriceToZero}
+                    onChange={(e) =>
+                      onChange({ setPriceToZero: e.target.checked })
+                    }
+                    className="mt-0.5 accent-[#0F6E56]"
+                  />
+                  <span className="text-[#4A6B5E]">
+                    Sett pris til 0 kr (kunden har allerede betalt via pakke)
+                  </span>
+                </label>
+              )}
+            </fieldset>
+          )}
           {error && (
             <p className="rounded-lg border border-red-200 bg-red-50 px-3 py-2 text-sm text-red-600">
               {error}
@@ -1400,6 +1726,15 @@ export default function AdminPage() {
   );
   const [manualBookingSaving, setManualBookingSaving] = useState(false);
   const [manualBookingError, setManualBookingError] = useState<string | null>(null);
+  const [customerPackages, setCustomerPackages] = useState<CustomerPackage[]>([]);
+  const [selectedClientPhone, setSelectedClientPhone] = useState<string | null>(null);
+  const [newPackageModalOpen, setNewPackageModalOpen] = useState(false);
+  const [newPackageClient, setNewPackageClient] = useState<ClientRow | null>(null);
+  const [newPackageForm, setNewPackageForm] = useState<NewPackageForm>(
+    emptyNewPackageForm(),
+  );
+  const [newPackageSaving, setNewPackageSaving] = useState(false);
+  const [newPackageError, setNewPackageError] = useState<string | null>(null);
   const [downloadingInvoiceId, setDownloadingInvoiceId] = useState<string | null>(null);
   const [invoices, setInvoices] = useState<InvoiceRow[]>([]);
   const [invoiceExportMonth, setInvoiceExportMonth] = useState(getCurrentInvoiceExportMonth);
@@ -1636,7 +1971,7 @@ export default function AdminPage() {
         return;
       }
 
-      const [bookingsRes, servicesRes, staffRes, invoicesRes] = await Promise.all([
+      const [bookingsRes, servicesRes, staffRes, invoicesRes, packagesRes] = await Promise.all([
         supabase
           .from("bookings")
           .select("*, staff(name), services(name)")
@@ -1657,6 +1992,11 @@ export default function AdminPage() {
             "invoice_number, created_at, bookings!inner(client_name, client_phone, price_nok, salon_id, services(name))",
           )
           .eq("bookings.salon_id", salonData.id)
+          .order("created_at", { ascending: false }),
+        supabase
+          .from("customer_packages")
+          .select("*")
+          .eq("salon_id", salonData.id)
           .order("created_at", { ascending: false }),
       ]);
 
@@ -1695,6 +2035,7 @@ export default function AdminPage() {
       setNotifyEmailReceipt(salonData.notify_email_receipt ?? true);
       setBookings((bookingsRes.data as BookingRow[] | null) ?? []);
       setInvoices((invoicesRes.data as InvoiceRow[] | null) ?? []);
+      setCustomerPackages((packagesRes.data as CustomerPackage[] | null) ?? []);
       setServices(servicesRes.data ?? []);
       setStaffList(staffRows);
       setStaffCount(staffRows.filter((s) => s.is_active).length);
@@ -1827,6 +2168,19 @@ export default function AdminPage() {
     return Array.from(map.values()).sort((a, b) => b.visits - a.visits);
   }, [bookings]);
 
+  const selectedClient = useMemo(
+    () => clients.find((c) => c.phone === selectedClientPhone) ?? null,
+    [clients, selectedClientPhone],
+  );
+
+  const selectedClientPackages = useMemo(
+    () =>
+      selectedClientPhone
+        ? customerPackages.filter((p) => p.client_phone === selectedClientPhone)
+        : [],
+    [customerPackages, selectedClientPhone],
+  );
+
   const latestBooking = useMemo(() => {
     return [...bookings]
       .filter((b) => b.status === "pending" || b.status === "confirmed")
@@ -1897,6 +2251,71 @@ export default function AdminPage() {
     setManualBookingError(null);
   }
 
+  function openNewPackageModal(client: ClientRow) {
+    setNewPackageClient(client);
+    setNewPackageForm(emptyNewPackageForm());
+    setNewPackageError(null);
+    setNewPackageModalOpen(true);
+  }
+
+  function closeNewPackageModal() {
+    setNewPackageModalOpen(false);
+    setNewPackageClient(null);
+    setNewPackageForm(emptyNewPackageForm());
+    setNewPackageError(null);
+  }
+
+  async function saveNewPackage(e: FormEvent) {
+    e.preventDefault();
+    if (!salon || !newPackageClient) return;
+
+    const totalCredits = parseInt(newPackageForm.totalCredits, 10);
+    if (!newPackageForm.name.trim() || !Number.isFinite(totalCredits) || totalCredits <= 0) {
+      setNewPackageError("Fyll inn navn og gyldig beløp/antall");
+      return;
+    }
+
+    setNewPackageSaving(true);
+    setNewPackageError(null);
+
+    const purchasedAt = new Date().toISOString();
+    const expiresAt = newPackageForm.expiresAt
+      ? new Date(`${newPackageForm.expiresAt}T23:59:59`).toISOString()
+      : null;
+
+    const supabase = createClient();
+    const { data, error } = await supabase
+      .from("customer_packages")
+      .insert({
+        salon_id: salon.id,
+        client_phone: newPackageClient.phone,
+        client_name: newPackageClient.name,
+        service_id:
+          newPackageForm.unitType === "visits" && newPackageForm.serviceId
+            ? newPackageForm.serviceId
+            : null,
+        name: newPackageForm.name.trim(),
+        total_credits: totalCredits,
+        used_credits: 0,
+        unit_type: newPackageForm.unitType,
+        purchased_at: purchasedAt,
+        expires_at: expiresAt,
+        notes: newPackageForm.notes.trim() || null,
+      })
+      .select()
+      .single();
+
+    setNewPackageSaving(false);
+
+    if (error || !data) {
+      setNewPackageError("Kunne ikke lagre pakken");
+      return;
+    }
+
+    setCustomerPackages((prev) => [data as CustomerPackage, ...prev]);
+    closeNewPackageModal();
+  }
+
   async function saveManualBooking(e: React.FormEvent) {
     e.preventDefault();
     if (!salon) return;
@@ -1931,6 +2350,11 @@ export default function AdminPage() {
     setManualBookingError(null);
 
     const supabase = createClient();
+    const bookingPrice = manualBookingForm.setPriceToZero ? 0 : service.price_nok;
+    const selectedPackage = manualBookingForm.usePackageId
+      ? customerPackages.find((p) => p.id === manualBookingForm.usePackageId)
+      : null;
+
     const { data, error } = await supabase
       .from("bookings")
       .insert({
@@ -1943,7 +2367,7 @@ export default function AdminPage() {
         client_notes: manualBookingForm.notes.trim() || null,
         starts_at: startsAt.toISOString(),
         ends_at: endsAt.toISOString(),
-        price_nok: service.price_nok,
+        price_nok: bookingPrice,
         status: "confirmed",
         source: "manual",
         sms_confirmation_sent: false,
@@ -1952,13 +2376,45 @@ export default function AdminPage() {
       .select("*, staff(name), services(name)")
       .single();
 
-    setManualBookingSaving(false);
-
     if (error || !data) {
+      setManualBookingSaving(false);
       setManualBookingError("Kunne ikke lagre avtalen");
       return;
     }
 
+    if (selectedPackage) {
+      const creditDelta =
+        selectedPackage.unit_type === "visits" ? 1 : service.price_nok;
+      const { error: packageError } = await supabase
+        .from("customer_packages")
+        .update({
+          used_credits: selectedPackage.used_credits + creditDelta,
+        })
+        .eq("id", selectedPackage.id);
+
+      if (packageError) {
+        setManualBookingSaving(false);
+        setManualBookingError("Avtalen ble lagret, men pakken kunne ikke oppdateres");
+        setBookings((prev) => [...prev, data as BookingRow]);
+        return;
+      }
+
+      await supabase.from("package_usage_log").insert({
+        customer_package_id: selectedPackage.id,
+        booking_id: data.id,
+        used_at: new Date().toISOString(),
+      });
+
+      setCustomerPackages((prev) =>
+        prev.map((p) =>
+          p.id === selectedPackage.id
+            ? { ...p, used_credits: p.used_credits + creditDelta }
+            : p,
+        ),
+      );
+    }
+
+    setManualBookingSaving(false);
     setBookings((prev) => [...prev, data as BookingRow]);
     closeManualBookingModal();
   }
@@ -2878,34 +3334,82 @@ export default function AdminPage() {
           )}
 
           {tab === "clients" && (
-            <div className="overflow-hidden rounded-xl border border-[#C8E6D8] bg-white shadow-sm">
-              {clients.length === 0 ? (
-                <p className="px-4 py-8 text-center text-sm text-[#7A9A8E]">
-                  Ingen kunder ennå
-                </p>
-              ) : (
-                <table className="w-full text-sm">
-                  <thead>
-                    <tr className="border-b border-[#C8E6D8] bg-[#f0faf6] text-left text-xs text-[#0F6E56]">
-                      <th className="px-4 py-3 font-bold">Navn</th>
-                      <th className="px-4 py-3 font-bold">Telefon</th>
-                      <th className="px-4 py-3 font-bold">E-post</th>
-                      <th className="px-4 py-3 font-bold">Besøk</th>
-                      <th className="px-4 py-3 font-bold">Sist</th>
-                    </tr>
-                  </thead>
-                  <tbody>
-                    {clients.map((c) => (
-                      <tr key={c.id} className="border-b border-[#C8E6D8] last:border-0">
-                        <td className="px-4 py-3 font-semibold">{c.name}</td>
-                        <td className="px-4 py-3 text-[#4A6B5E]">{c.phone}</td>
-                        <td className="px-4 py-3 text-[#4A6B5E]">{c.email ?? "—"}</td>
-                        <td className="px-4 py-3 font-bold text-[#0F6E56]">{c.visits}</td>
-                        <td className="px-4 py-3 text-[#7A9A8E]">{formatDateShort(c.lastVisit)}</td>
+            <div className="space-y-4">
+              <div className="overflow-hidden rounded-xl border border-[#C8E6D8] bg-white shadow-sm">
+                {clients.length === 0 ? (
+                  <p className="px-4 py-8 text-center text-sm text-[#7A9A8E]">
+                    Ingen kunder ennå
+                  </p>
+                ) : (
+                  <table className="w-full text-sm">
+                    <thead>
+                      <tr className="border-b border-[#C8E6D8] bg-[#f0faf6] text-left text-xs text-[#0F6E56]">
+                        <th className="px-4 py-3 font-bold">Navn</th>
+                        <th className="px-4 py-3 font-bold">Telefon</th>
+                        <th className="px-4 py-3 font-bold">E-post</th>
+                        <th className="px-4 py-3 font-bold">Besøk</th>
+                        <th className="px-4 py-3 font-bold">Sist</th>
                       </tr>
-                    ))}
-                  </tbody>
-                </table>
+                    </thead>
+                    <tbody>
+                      {clients.map((c) => (
+                        <tr
+                          key={c.id}
+                          onClick={() => setSelectedClientPhone(c.phone)}
+                          className={`cursor-pointer border-b border-[#C8E6D8] last:border-0 transition-colors hover:bg-[#EFF8F4] ${
+                            selectedClientPhone === c.phone ? "bg-[#d1f0e4]" : ""
+                          }`}
+                        >
+                          <td className="px-4 py-3 font-semibold">{c.name}</td>
+                          <td className="px-4 py-3 text-[#4A6B5E]">{c.phone}</td>
+                          <td className="px-4 py-3 text-[#4A6B5E]">{c.email ?? "—"}</td>
+                          <td className="px-4 py-3 font-bold text-[#0F6E56]">{c.visits}</td>
+                          <td className="px-4 py-3 text-[#7A9A8E]">{formatDateShort(c.lastVisit)}</td>
+                        </tr>
+                      ))}
+                    </tbody>
+                  </table>
+                )}
+              </div>
+
+              {selectedClient && (
+                <div className="rounded-xl border border-[#C8E6D8] bg-white p-5 shadow-sm">
+                  <div className="mb-4 flex flex-wrap items-start justify-between gap-3">
+                    <div>
+                      <h3 className="text-lg font-bold text-[#0F6E56]">{selectedClient.name}</h3>
+                      <p className="text-sm text-[#4A6B5E]">{selectedClient.phone}</p>
+                      {selectedClient.email && (
+                        <p className="text-sm text-[#7A9A8E]">{selectedClient.email}</p>
+                      )}
+                    </div>
+                    <button
+                      type="button"
+                      onClick={() => openNewPackageModal(selectedClient)}
+                      className="rounded-lg bg-[#0F6E56] px-4 py-2 text-sm font-bold text-white transition-colors hover:bg-[#0d5c48]"
+                    >
+                      + Nytt pakke
+                    </button>
+                  </div>
+
+                  <h4 className="mb-3 text-sm font-bold text-[#0F6E56]">Pakker</h4>
+                  {selectedClientPackages.length === 0 ? (
+                    <p className="text-sm text-[#7A9A8E]">Ingen pakker registrert</p>
+                  ) : (
+                    <ul className="space-y-2">
+                      {selectedClientPackages.map((pkg) => (
+                        <li
+                          key={pkg.id}
+                          className="flex flex-wrap items-center justify-between gap-2 rounded-lg border border-[#C8E6D8] px-4 py-3"
+                        >
+                          <span className="text-sm font-semibold text-[#4A6B5E]">
+                            {pkg.name} — {formatPackageRemaining(pkg)}
+                          </span>
+                          <PackageStatusBadge pkg={pkg} />
+                        </li>
+                      ))}
+                    </ul>
+                  )}
+                </div>
               )}
             </div>
           )}
@@ -3571,11 +4075,24 @@ export default function AdminPage() {
           form={manualBookingForm}
           services={services}
           staffList={staffList}
+          customerPackages={customerPackages}
           saving={manualBookingSaving}
           error={manualBookingError}
           onChange={(patch) => setManualBookingForm((f) => ({ ...f, ...patch }))}
           onSave={saveManualBooking}
           onClose={closeManualBookingModal}
+        />
+      )}
+
+      {newPackageModalOpen && (
+        <NewPackageModal
+          form={newPackageForm}
+          services={services}
+          saving={newPackageSaving}
+          error={newPackageError}
+          onChange={(patch) => setNewPackageForm((f) => ({ ...f, ...patch }))}
+          onSave={saveNewPackage}
+          onClose={closeNewPackageModal}
         />
       )}
     </main>

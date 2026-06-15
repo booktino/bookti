@@ -161,6 +161,35 @@ export interface Database {
         Insert: Omit<Database['public']['Tables']['invoices']['Row'], 'id' | 'created_at'>
         Update: Partial<Database['public']['Tables']['invoices']['Insert']>
       }
+      customer_packages: {
+        Row: {
+          id: string
+          salon_id: string
+          client_phone: string
+          client_name: string
+          service_id: string | null
+          name: string
+          total_credits: number
+          used_credits: number
+          unit_type: 'visits' | 'amount'
+          purchased_at: string
+          expires_at: string | null
+          notes: string | null
+          created_at: string
+        }
+        Insert: Omit<Database['public']['Tables']['customer_packages']['Row'], 'id' | 'created_at'>
+        Update: Partial<Database['public']['Tables']['customer_packages']['Insert']>
+      }
+      package_usage_log: {
+        Row: {
+          id: string
+          customer_package_id: string
+          booking_id: string | null
+          used_at: string
+        }
+        Insert: Omit<Database['public']['Tables']['package_usage_log']['Row'], 'id'>
+        Update: Partial<Database['public']['Tables']['package_usage_log']['Insert']>
+      }
     }
   }
 }
