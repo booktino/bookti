@@ -4204,6 +4204,9 @@ export default function AdminPage() {
         <OnboardingWizard
           salon={{ id: salon.id, slug: salon.slug, name: salon.name }}
           hasStaff={staffList.length > 0}
+          hasService={services.length > 0}
+          staffCount={staffList.length}
+          serviceCount={services.length}
           onAddStaff={openAddStaff}
           onAddService={openAddService}
           onOpenAvailability={() => {

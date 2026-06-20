@@ -13,11 +13,20 @@ type OnboardingSalon = {
 type OnboardingWizardProps = {
   salon: OnboardingSalon;
   hasStaff: boolean;
+  hasService: boolean;
+  staffCount: number;
+  serviceCount: number;
   onAddStaff: () => void;
   onAddService: () => void;
   onOpenAvailability: () => void;
   onClose: () => void;
 };
+
+function getInitialStep(hasStaff: boolean, hasService: boolean): number {
+  if (!hasStaff) return 0;
+  if (!hasService) return 1;
+  return 2;
+}
 
 const STEPS = [
   {
@@ -52,12 +61,15 @@ const STEPS = [
 export default function OnboardingWizard({
   salon,
   hasStaff,
+  hasService,
+  staffCount,
+  serviceCount,
   onAddStaff,
   onAddService,
   onOpenAvailability,
   onClose,
 }: OnboardingWizardProps) {
-  const [step, setStep] = useState(0);
+  const [step, setStep] = useState(() => getInitialStep(hasStaff, hasService));
   const [copied, setCopied] = useState(false);
   const canvasRef = useRef<HTMLDivElement>(null);
 
@@ -137,6 +149,18 @@ export default function OnboardingWizard({
         <div className="flex-1 overflow-y-auto px-6 py-6">
           <h2 className="text-xl font-bold text-[#0F6E56]">{current.title}</h2>
           <p className="mt-2 text-sm leading-relaxed text-[#4A6B5E]">{current.description}</p>
+
+          {current.action === "staff" && hasStaff && (
+            <p className="mt-4 rounded-lg border border-[#C8E6D8] bg-[#EFF8F4] px-3 py-2 text-sm font-semibold text-[#0F6E56]">
+              ✓ Du har allerede lagt til ansatte ({staffCount})
+            </p>
+          )}
+
+          {current.action === "service" && hasService && (
+            <p className="mt-4 rounded-lg border border-[#C8E6D8] bg-[#EFF8F4] px-3 py-2 text-sm font-semibold text-[#0F6E56]">
+              ✓ Du har allerede lagt til tjenester ({serviceCount})
+            </p>
+          )}
 
           {current.action === "availability" && (
             <p className="mt-3 rounded-lg border border-[#C8E6D8] bg-[#EFF8F4]/60 px-3 py-2 text-xs text-[#4A6B5E]">
