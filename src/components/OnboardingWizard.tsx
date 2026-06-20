@@ -77,14 +77,18 @@ export default function OnboardingWizard({
   const current = STEPS[step];
   const isLastStep = step === STEPS.length - 1;
 
-  function handleClose() {
+  function handleFinish() {
     markOnboardingCompleted(salon.id);
+    onClose();
+  }
+
+  function handleDismiss() {
     onClose();
   }
 
   function handleNext() {
     if (isLastStep) {
-      handleClose();
+      handleFinish();
       return;
     }
     setStep((s) => s + 1);
@@ -120,7 +124,7 @@ export default function OnboardingWizard({
       <div className="relative flex max-h-[90vh] w-full max-w-lg flex-col overflow-hidden rounded-xl border border-[#C8E6D8] bg-white shadow-2xl">
         <button
           type="button"
-          onClick={handleClose}
+          onClick={handleDismiss}
           className="absolute right-4 top-4 z-10 text-xl text-[#7A9A8E] transition-colors hover:text-[#0D3B2E]"
           aria-label="Lukk"
         >
