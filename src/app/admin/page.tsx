@@ -55,7 +55,7 @@ import {
 } from "@/lib/packages/customer-packages";
 import { getServiceIcon } from "@/lib/business-types";
 
-type AdminTab = "calendar" | "services" | "staff" | "clients" | "invoices" | "settings" | "reviews" | "statistikk";
+type AdminTab = "home" | "calendar" | "services" | "staff" | "clients" | "invoices" | "settings" | "reviews" | "statistikk";
 
 type Salon = Database["public"]["Tables"]["salons"]["Row"];
 type Service = Database["public"]["Tables"]["services"]["Row"];
@@ -374,6 +374,7 @@ function adminTabIcon(tabId: AdminTab, businessType: string | null | undefined):
 }
 
 const TABS: { id: AdminTab; label: string; icon: string }[] = [
+  { id: "home", label: "Hjem", icon: "🏠" },
   { id: "calendar", label: no.admin.calendar, icon: "📅" },
   { id: "services", label: no.admin.services, icon: "📋" },
   { id: "staff", label: no.admin.staff, icon: "👤" },
@@ -1678,6 +1679,7 @@ export default function AdminPage() {
   const [staffList, setStaffList] = useState<Staff[]>([]);
   const [staffCount, setStaffCount] = useState(0);
   const [showOnboardingWizard, setShowOnboardingWizard] = useState(false);
+  const [onboardingCompleted, setOnboardingCompleted] = useState(true);
 
   const [serviceModalOpen, setServiceModalOpen] = useState(false);
   const [editingService, setEditingService] = useState<Service | null>(null);
@@ -2103,6 +2105,8 @@ export default function AdminPage() {
 
   useEffect(() => {
     if (loading || !salon) return;
+
+    setOnboardingCompleted(isOnboardingCompleted(salon.id));
 
     const isNewSalon = staffList.length === 0 && services.length === 0;
     const resume = consumeOnboardingResume(salon.id);
@@ -3087,6 +3091,89 @@ export default function AdminPage() {
         </header>
 
         <div className="p-8">
+          {tab === "home" && (
+            <>
+              <div className="mb-6 grid grid-cols-2 gap-3 sm:grid-cols-4">
+                {[
+                  { label: no.dashboard.appointmentsToday, val: String(todayBookings.length) },
+                  { label: no.dashboard.weeklyRevenue, val: formatPriceNok(weeklyRevenue) },
+                  { label: no.dashboard.occupancy, val: `${occupancy}%` },
+                  { label: no.dashboard.activeCustomers, val: String(activeCustomers) },
+                ].map(({ label, val }) => (
+                  <div key={label} className="rounded-xl border-l-[3px] border-l-[#0F6E56] bg-white p-4 shadow-sm">
+                    <div className="text-xs text-[#1a5c47]">{label}</div>
+                    <div className="mt-1 text-2xl font-extrabold text-[#0F6E56]">{val}</div>
+                  </div>
+                ))}
+              </div>
+
+              {!onboardingCompleted && (
+                <div className="mb-6 rounded-xl border border-[#C8E6D8] bg-white p-5 shadow-sm">
+                  <h2 className="text-sm font-bold text-[#0F6E56]">Fullfør oppsettet</h2>
+                  <p className="mt-1 text-sm text-[#4A6B5E]">
+                    Du er nesten klar — fullfør disse stegene for å ta imot bookinger.
+                  </p>
+                  <ul className="mt-4 space-y-2 text-sm">
+                    <li className="flex items-center gap-2 text-[#4A6B5E]">
+                      <span className={staffList.length > 0 ? "text-[#0F6E56]" : "text-[#7A9A8E]"}>
+                        {staffList.length > 0 ? "✓" : "○"}
+                      </span>
+                      <span className={staffList.length > 0 ? "font-semibold text-[#0F6E56]" : ""}>
+                        Ansatt
+                      </span>
+                    </li>
+                    <li className="flex items-center gap-2 text-[#4A6B5E]">
+                      <span className={services.length > 0 ? "text-[#0F6E56]" : "text-[#7A9A8E]"}>
+                        {services.length > 0 ? "✓" : "○"}
+                      </span>
+                      <span className={services.length > 0 ? "font-semibold text-[#0F6E56]" : ""}>
+                        Tjeneste
+                      </span>
+                    </li>
+                    <li className="flex items-center gap-2 text-[#4A6B5E]">
+                      <span className="text-[#7A9A8E]">○</span>
+                      <span>Arbeidstider</span>
+                    </li>
+                  </ul>
+                  <button
+                    type="button"
+                    onClick={() => setShowOnboardingWizard(true)}
+                    className="mt-4 inline-flex text-sm font-bold text-[#0F6E56] transition-colors hover:text-[#5DCAA5]"
+                  >
+                    Fortsett oppsett →
+                  </button>
+                </div>
+              )}
+
+              <div>
+                <h2 className="mb-3 text-sm font-bold text-[#0F6E56]">Hurtighandlinger</h2>
+                <div className="grid grid-cols-1 gap-3 sm:grid-cols-3">
+                  <button
+                    type="button"
+                    onClick={openManualBookingModal}
+                    className="flex items-center justify-center gap-2 rounded-xl border border-[#C8E6D8] bg-white px-4 py-4 text-sm font-bold text-[#0F6E56] shadow-sm transition-colors hover:border-[#5DCAA5] hover:bg-[#EFF8F4]"
+                  >
+                    + Ny avtale
+                  </button>
+                  <button
+                    type="button"
+                    onClick={() => setTab("calendar")}
+                    className="flex items-center justify-center gap-2 rounded-xl border border-[#C8E6D8] bg-white px-4 py-4 text-sm font-bold text-[#0F6E56] shadow-sm transition-colors hover:border-[#5DCAA5] hover:bg-[#EFF8F4]"
+                  >
+                    📅 Se kalender
+                  </button>
+                  <button
+                    type="button"
+                    onClick={() => setShowQr(true)}
+                    className="flex items-center justify-center gap-2 rounded-xl border border-[#C8E6D8] bg-white px-4 py-4 text-sm font-bold text-[#0F6E56] shadow-sm transition-colors hover:border-[#5DCAA5] hover:bg-[#EFF8F4]"
+                  >
+                    📱 QR-kode
+                  </button>
+                </div>
+              </div>
+            </>
+          )}
+
           {tab === "calendar" && (
             <>
               {latestBooking && (
@@ -3112,20 +3199,6 @@ export default function AdminPage() {
                   <span className="ml-auto text-xs opacity-40">ny</span>
                 </div>
               )}
-
-              <div className="mb-6 grid grid-cols-2 gap-3 sm:grid-cols-4">
-                {[
-                  { label: no.dashboard.appointmentsToday, val: String(todayBookings.length) },
-                  { label: no.dashboard.weeklyRevenue, val: formatPriceNok(weeklyRevenue) },
-                  { label: no.dashboard.occupancy, val: `${occupancy}%` },
-                  { label: no.dashboard.activeCustomers, val: String(activeCustomers) },
-                ].map(({ label, val }) => (
-                  <div key={label} className="rounded-xl border-l-[3px] border-l-[#0F6E56] bg-white p-4 shadow-sm">
-                    <div className="text-xs text-[#1a5c47]">{label}</div>
-                    <div className="mt-1 text-2xl font-extrabold text-[#0F6E56]">{val}</div>
-                  </div>
-                ))}
-              </div>
 
               <div className="relative flex flex-col gap-4 lg:flex-row lg:items-start">
                 <div className="min-w-0 flex-1 rounded-xl border border-[#C8E6D8] bg-white p-4 shadow-sm sm:p-6">
@@ -4137,7 +4210,10 @@ export default function AdminPage() {
             const firstStaff = staffList[0];
             if (firstStaff) void openAvailabilityModal(firstStaff);
           }}
-          onClose={() => setShowOnboardingWizard(false)}
+          onClose={() => {
+            setShowOnboardingWizard(false);
+            setOnboardingCompleted(isOnboardingCompleted(salon.id));
+          }}
         />
       )}
 
