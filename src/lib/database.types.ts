@@ -191,6 +191,19 @@ export interface Database {
         Insert: Omit<Database['public']['Tables']['package_usage_log']['Row'], 'id'>
         Update: Partial<Database['public']['Tables']['package_usage_log']['Insert']>
       }
+      blocked_times: {
+        Row: {
+          id: string
+          salon_id: string
+          staff_id: string | null
+          starts_at: string
+          ends_at: string
+          reason: string | null
+          created_at: string
+        }
+        Insert: Omit<Database['public']['Tables']['blocked_times']['Row'], 'id' | 'created_at'>
+        Update: Partial<Database['public']['Tables']['blocked_times']['Insert']>
+      }
     }
   }
 }

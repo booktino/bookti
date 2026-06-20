@@ -12,7 +12,9 @@ import {
   defaultWeekSchedule,
   mergeWithDefaults,
   WEEKDAY_LABELS,
+  isDayBlockedForStaff,
   type AvailabilityEntry,
+  type BlockedPeriod,
 } from "@/lib/availability";
 import {
   CANCELLATION_FEE_OPTIONS,
@@ -53,6 +55,7 @@ type AdminTab = "calendar" | "services" | "staff" | "clients" | "invoices" | "se
 type Salon = Database["public"]["Tables"]["salons"]["Row"];
 type Service = Database["public"]["Tables"]["services"]["Row"];
 type Staff = Database["public"]["Tables"]["staff"]["Row"];
+type BlockedTimeRow = Database["public"]["Tables"]["blocked_times"]["Row"];
 
 type BookingRow = Database["public"]["Tables"]["bookings"]["Row"] & {
   staff: { name: string } | null;
@@ -107,6 +110,13 @@ type StaffForm = {
   is_active: boolean;
 };
 
+type BlockedPeriodForm = {
+  fromDate: string;
+  toDate: string;
+  staffId: string;
+  reason: string;
+};
+
 const EMPTY_SERVICE_FORM: ServiceForm = {
   name: "",
   description: "",
@@ -121,6 +131,20 @@ const EMPTY_STAFF_FORM: StaffForm = {
   phone: "",
   is_active: true,
 };
+
+function emptyBlockedPeriodForm(): BlockedPeriodForm {
+  const today = getTodayKey();
+  return { fromDate: today, toDate: today, staffId: "", reason: "" };
+}
+
+function formatBlockedPeriodRange(startsAt: string, endsAt: string): string {
+  const start = new Date(startsAt);
+  const end = new Date(endsAt);
+  const fmt = (d: Date) =>
+    `${d.getDate()}. ${NORWEGIAN_MONTHS[d.getMonth()].slice(0, 3)} ${d.getFullYear()}`;
+  if (fmt(start) === fmt(end)) return fmt(start);
+  return `${fmt(start)} – ${fmt(end)}`;
+}
 
 const NORWEGIAN_MONTHS = [
   "januar",
@@ -1668,6 +1692,15 @@ export default function AdminPage() {
   const [availabilitySaving, setAvailabilitySaving] = useState(false);
   const [availabilityLoading, setAvailabilityLoading] = useState(false);
 
+  const [blockedTimes, setBlockedTimes] = useState<BlockedTimeRow[]>([]);
+  const [blockedPeriodModalOpen, setBlockedPeriodModalOpen] = useState(false);
+  const [blockedPeriodForm, setBlockedPeriodForm] = useState<BlockedPeriodForm>(
+    emptyBlockedPeriodForm(),
+  );
+  const [blockedPeriodSaving, setBlockedPeriodSaving] = useState(false);
+  const [blockedPeriodError, setBlockedPeriodError] = useState<string | null>(null);
+  const [deleteBlockedTimeId, setDeleteBlockedTimeId] = useState<string | null>(null);
+
   const [cancellationAllowed, setCancellationAllowed] = useState(false);
   const [cancellationHours, setCancellationHours] = useState(24);
   const [cancellationReasonRequired, setCancellationReasonRequired] = useState(false);
@@ -1977,7 +2010,8 @@ export default function AdminPage() {
         return;
       }
 
-      const [bookingsRes, servicesRes, staffRes, invoicesRes, packagesRes] = await Promise.all([
+      const [bookingsRes, servicesRes, staffRes, invoicesRes, packagesRes, blockedRes] =
+        await Promise.all([
         supabase
           .from("bookings")
           .select("*, staff(name), services(name)")
@@ -2004,6 +2038,11 @@ export default function AdminPage() {
           .select("*")
           .eq("salon_id", salonData.id)
           .order("created_at", { ascending: false }),
+        supabase
+          .from("blocked_times")
+          .select("*")
+          .eq("salon_id", salonData.id)
+          .order("starts_at", { ascending: true }),
       ]);
 
       if (cancelled) return;
@@ -2045,6 +2084,7 @@ export default function AdminPage() {
       setServices(servicesRes.data ?? []);
       setStaffList(staffRows);
       setStaffCount(staffRows.filter((s) => s.is_active).length);
+      setBlockedTimes((blockedRes.data as BlockedTimeRow[] | null) ?? []);
       setLoading(false);
     }
 
@@ -2219,6 +2259,104 @@ export default function AdminPage() {
   const selectedBookings = selectedDay
     ? (bookingsByDate.get(selectedDay) ?? [])
     : [];
+
+  const blockedPeriodsForCalendar: BlockedPeriod[] = useMemo(
+    () =>
+      blockedTimes.map((b) => ({
+        starts_at: b.starts_at,
+        ends_at: b.ends_at,
+        staff_id: b.staff_id,
+      })),
+    [blockedTimes],
+  );
+
+  const upcomingBlockedTimes = useMemo(() => {
+    const now = new Date();
+    return blockedTimes
+      .filter((b) => new Date(b.ends_at) >= now)
+      .sort((a, b) => new Date(a.starts_at).getTime() - new Date(b.starts_at).getTime());
+  }, [blockedTimes]);
+
+  const calendarStaffFilterId =
+    selectedStaffFilter === "all" ? null : selectedStaffFilter;
+
+  function blockedPeriodAppliesTo(b: BlockedTimeRow): string {
+    if (!b.staff_id) return "Hele salongen";
+    return staffList.find((s) => s.id === b.staff_id)?.name ?? "Ansatt";
+  }
+
+  function openBlockedPeriodModal() {
+    setBlockedPeriodForm(emptyBlockedPeriodForm());
+    setBlockedPeriodError(null);
+    setBlockedPeriodModalOpen(true);
+  }
+
+  function closeBlockedPeriodModal() {
+    setBlockedPeriodModalOpen(false);
+    setBlockedPeriodForm(emptyBlockedPeriodForm());
+    setBlockedPeriodError(null);
+  }
+
+  async function saveBlockedPeriod(e: FormEvent) {
+    e.preventDefault();
+    if (!salon) return;
+
+    const { fromDate, toDate, staffId, reason } = blockedPeriodForm;
+    if (!fromDate || !toDate) {
+      setBlockedPeriodError("Velg fra- og til-dato");
+      return;
+    }
+    if (toDate < fromDate) {
+      setBlockedPeriodError("Til-dato kan ikke være før fra-dato");
+      return;
+    }
+
+    setBlockedPeriodSaving(true);
+    setBlockedPeriodError(null);
+
+    const startsAt = new Date(`${fromDate}T00:00:00`).toISOString();
+    const endsAt = new Date(`${toDate}T23:59:59`).toISOString();
+
+    const supabase = createClient();
+    const { data, error } = await supabase
+      .from("blocked_times")
+      .insert({
+        salon_id: salon.id,
+        staff_id: staffId || null,
+        starts_at: startsAt,
+        ends_at: endsAt,
+        reason: reason.trim() || null,
+      })
+      .select()
+      .single();
+
+    setBlockedPeriodSaving(false);
+
+    if (error || !data) {
+      setBlockedPeriodError("Kunne ikke lagre stengt periode");
+      return;
+    }
+
+    setBlockedTimes((prev) =>
+      [...prev, data as BlockedTimeRow].sort(
+        (a, b) => new Date(a.starts_at).getTime() - new Date(b.starts_at).getTime(),
+      ),
+    );
+    closeBlockedPeriodModal();
+  }
+
+  async function confirmDeleteBlockedTime() {
+    if (!deleteBlockedTimeId) return;
+    const supabase = createClient();
+    const { error } = await supabase
+      .from("blocked_times")
+      .delete()
+      .eq("id", deleteBlockedTimeId);
+    if (!error) {
+      setBlockedTimes((prev) => prev.filter((b) => b.id !== deleteBlockedTimeId));
+    }
+    setDeleteBlockedTimeId(null);
+  }
 
   function prevMonth() {
     setCurrentCalendarDate((d) => new Date(d.getFullYear(), d.getMonth() - 1, 1));
@@ -3061,30 +3199,42 @@ export default function AdminPage() {
                       const isToday = key === today;
                       const isSelected = key === selectedDay;
                       const hasBookings = count > 0;
+                      const isBlocked = isDayBlockedForStaff(
+                        key,
+                        blockedPeriodsForCalendar,
+                        calendarStaffFilterId,
+                      );
 
                       return (
                         <button
                           key={key}
                           onClick={() => setSelectedDay(key === selectedDay ? null : key)}
                           className={`relative flex aspect-square min-h-[3rem] flex-col items-start rounded-lg border p-1.5 text-left transition-all sm:min-h-[4.5rem] sm:p-2 ${
-                            isToday
-                              ? "border-[#0F6E56] bg-[#0F6E56] text-white shadow-sm"
-                              : hasBookings
-                                ? "border-[#5DCAA5]/30 bg-[#e8f8f2] hover:bg-[#d1f0e4]"
-                                : "border-[#C8E6D8]/60 bg-white/60 hover:bg-[#d1f0e4]"
+                            isBlocked
+                              ? "border-[#C8C8C8] bg-[#f0f0f0] opacity-70"
+                              : isToday
+                                ? "border-[#0F6E56] bg-[#0F6E56] text-white shadow-sm"
+                                : hasBookings
+                                  ? "border-[#5DCAA5]/30 bg-[#e8f8f2] hover:bg-[#d1f0e4]"
+                                  : "border-[#C8E6D8]/60 bg-white/60 hover:bg-[#d1f0e4]"
                           } ${isSelected && !isToday ? "ring-2 ring-[#0F6E56] ring-offset-1" : ""}`}
                         >
-                          {hasBookings && !isToday && (
+                          {hasBookings && !isToday && !isBlocked && (
                             <span className="absolute top-1.5 right-1.5 h-1.5 w-1.5 rounded-full bg-[#0F6E56] sm:top-2 sm:right-2" />
                           )}
                           <span
                             className={`text-xs font-bold sm:text-sm ${
-                              isToday ? "text-white" : "text-[#1a3d30]"
+                              isToday ? "text-white" : isBlocked ? "text-[#888]" : "text-[#1a3d30]"
                             }`}
                           >
                             {day}
                           </span>
-                          {count > 0 && (
+                          {isBlocked && (
+                            <span className="mt-auto text-[8px] font-bold uppercase text-[#888] sm:text-[9px]">
+                              Stengt
+                            </span>
+                          )}
+                          {!isBlocked && count > 0 && (
                             <span
                               className={`mt-auto flex h-4 min-w-4 items-center justify-center rounded-full px-1 text-[9px] font-bold sm:h-5 sm:min-w-5 sm:text-[10px] ${
                                 isToday
@@ -3128,6 +3278,43 @@ export default function AdminPage() {
                       </div>
 
                       <div className="flex-1 overflow-y-auto p-4 sm:p-5">
+                        {isDayBlockedForStaff(
+                          selectedDay,
+                          blockedPeriodsForCalendar,
+                          calendarStaffFilterId,
+                        ) && (
+                          <div className="mb-4 rounded-xl border border-[#C8C8C8] bg-[#f0f0f0] px-4 py-3 text-sm text-[#666]">
+                            <span className="font-bold uppercase text-[#888]">Stengt</span>
+                            {blockedTimes
+                              .filter((b) => {
+                                if (calendarStaffFilterId === null && b.staff_id) return false;
+                                if (
+                                  calendarStaffFilterId !== null &&
+                                  b.staff_id &&
+                                  b.staff_id !== calendarStaffFilterId
+                                ) {
+                                  return false;
+                                }
+                                return isDayBlockedForStaff(
+                                  selectedDay,
+                                  [
+                                    {
+                                      starts_at: b.starts_at,
+                                      ends_at: b.ends_at,
+                                      staff_id: b.staff_id,
+                                    },
+                                  ],
+                                  calendarStaffFilterId,
+                                );
+                              })
+                              .map((b) => (
+                                <p key={b.id} className="mt-1 text-xs">
+                                  {blockedPeriodAppliesTo(b)}
+                                  {b.reason ? ` — ${b.reason}` : ""}
+                                </p>
+                              ))}
+                          </div>
+                        )}
                         {selectedBookings.length === 0 ? (
                           <p className="py-8 text-center text-sm text-[#7A9A8E]">
                             Ingen avtaler denne dagen
@@ -3336,6 +3523,51 @@ export default function AdminPage() {
                   </table>
                 )}
               </div>
+
+              <section className="mt-8 overflow-hidden rounded-xl border border-[#C8E6D8] bg-white shadow-sm">
+                <div className="flex items-center justify-between border-b border-[#C8E6D8] bg-[#f0faf6] px-4 py-3">
+                  <h3 className="text-sm font-bold text-[#0F6E56]">Stengt periode</h3>
+                  <button
+                    type="button"
+                    onClick={openBlockedPeriodModal}
+                    className="rounded-lg bg-[#0F6E56] px-3 py-1.5 text-xs font-bold text-white transition-colors hover:bg-[#0d5c48]"
+                  >
+                    + Stengt periode
+                  </button>
+                </div>
+                {upcomingBlockedTimes.length === 0 ? (
+                  <p className="px-4 py-6 text-center text-sm text-[#7A9A8E]">
+                    Ingen planlagte stengte perioder
+                  </p>
+                ) : (
+                  <ul className="divide-y divide-[#C8E6D8]">
+                    {upcomingBlockedTimes.map((b) => (
+                      <li
+                        key={b.id}
+                        className="flex items-start justify-between gap-3 px-4 py-3"
+                      >
+                        <div className="min-w-0 flex-1">
+                          <p className="text-sm font-semibold text-[#4A6B5E]">
+                            {formatBlockedPeriodRange(b.starts_at, b.ends_at)}
+                          </p>
+                          <p className="text-xs text-[#7A9A8E]">
+                            {blockedPeriodAppliesTo(b)}
+                            {b.reason ? ` · ${b.reason}` : ""}
+                          </p>
+                        </div>
+                        <button
+                          type="button"
+                          onClick={() => setDeleteBlockedTimeId(b.id)}
+                          className="shrink-0 rounded-lg border border-[#fee2e2] px-2 py-1 text-xs font-bold text-[#dc2626] hover:bg-[#fee2e2]"
+                          aria-label="Slett"
+                        >
+                          Slett
+                        </button>
+                      </li>
+                    ))}
+                  </ul>
+                )}
+              </section>
             </>
           )}
 
@@ -3973,6 +4205,138 @@ export default function AdminPage() {
               <button
                 type="button"
                 onClick={confirmDeleteStaff}
+                className="flex-1 rounded-xl bg-[#dc2626] py-2.5 text-sm font-bold text-white transition-colors hover:bg-[#b91c1c]"
+              >
+                Slett
+              </button>
+            </div>
+          </div>
+        </div>
+      )}
+
+      {blockedPeriodModalOpen && (
+        <div
+          className="fixed inset-0 z-[60] flex items-center justify-center bg-black/60 p-4"
+          onClick={closeBlockedPeriodModal}
+        >
+          <div
+            className="w-full max-w-md rounded-xl border border-[#C8E6D8] bg-white p-6 shadow-xl"
+            onClick={(e) => e.stopPropagation()}
+          >
+            <h2 className="mb-4 text-lg font-bold text-[#0F6E56]">Stengt periode</h2>
+            <form onSubmit={saveBlockedPeriod} className="space-y-4">
+              <div className="grid grid-cols-2 gap-3">
+                <label className="block">
+                  <span className="text-xs font-bold text-[#7A9A8E]">Fra dato</span>
+                  <input
+                    type="date"
+                    required
+                    value={blockedPeriodForm.fromDate}
+                    onChange={(e) => {
+                      const fromDate = e.target.value;
+                      setBlockedPeriodForm((f) => ({
+                        ...f,
+                        fromDate,
+                        toDate: f.toDate < fromDate ? fromDate : f.toDate,
+                      }));
+                    }}
+                    className={inputClass}
+                  />
+                </label>
+                <label className="block">
+                  <span className="text-xs font-bold text-[#7A9A8E]">Til dato</span>
+                  <input
+                    type="date"
+                    required
+                    value={blockedPeriodForm.toDate}
+                    min={blockedPeriodForm.fromDate}
+                    onChange={(e) =>
+                      setBlockedPeriodForm((f) => ({ ...f, toDate: e.target.value }))
+                    }
+                    className={inputClass}
+                  />
+                </label>
+              </div>
+              <label className="block">
+                <span className="text-xs font-bold text-[#7A9A8E]">Ansatt</span>
+                <select
+                  value={blockedPeriodForm.staffId}
+                  onChange={(e) =>
+                    setBlockedPeriodForm((f) => ({ ...f, staffId: e.target.value }))
+                  }
+                  className={inputClass}
+                >
+                  <option value="">Hele salongen</option>
+                  {staffList.map((member) => (
+                    <option key={member.id} value={member.id}>
+                      {member.name}
+                    </option>
+                  ))}
+                </select>
+              </label>
+              <label className="block">
+                <span className="text-xs font-bold text-[#7A9A8E]">Årsak</span>
+                <input
+                  type="text"
+                  value={blockedPeriodForm.reason}
+                  onChange={(e) =>
+                    setBlockedPeriodForm((f) => ({ ...f, reason: e.target.value }))
+                  }
+                  placeholder="Ferie, sykdom, helligdag..."
+                  className={inputClass}
+                />
+              </label>
+              {blockedPeriodError && (
+                <p className="rounded-lg border border-[#fee2e2] bg-[#fee2e2]/40 px-3 py-2 text-center text-sm font-semibold text-[#dc2626]">
+                  {blockedPeriodError}
+                </p>
+              )}
+              <div className="flex gap-3 pt-2">
+                <button
+                  type="button"
+                  onClick={closeBlockedPeriodModal}
+                  disabled={blockedPeriodSaving}
+                  className="flex-1 rounded-xl border border-[#C8E6D8] bg-[#EFF8F4] py-2.5 text-sm font-semibold text-[#4A6B5E] transition-colors hover:bg-[#C8E6D8] disabled:opacity-60"
+                >
+                  Avbryt
+                </button>
+                <button
+                  type="submit"
+                  disabled={blockedPeriodSaving}
+                  className="flex-1 rounded-xl bg-[#0F6E56] py-2.5 text-sm font-bold text-white transition-colors hover:bg-[#0d5c48] disabled:opacity-60"
+                >
+                  {blockedPeriodSaving ? "Lagrer…" : "Lagre"}
+                </button>
+              </div>
+            </form>
+          </div>
+        </div>
+      )}
+
+      {deleteBlockedTimeId !== null && (
+        <div
+          className="fixed inset-0 z-[60] flex items-center justify-center bg-black/60 p-4"
+          onClick={() => setDeleteBlockedTimeId(null)}
+        >
+          <div
+            className="w-full max-w-sm rounded-xl border border-[#C8E6D8] bg-white p-6 shadow-xl"
+            onClick={(e) => e.stopPropagation()}
+          >
+            <h2 className="mb-3 text-lg font-bold text-[#0F6E56]">Slett stengt periode</h2>
+            <p className="mb-6 text-sm text-[#4A6B5E]">
+              Er du sikker på at du vil fjerne denne stengte perioden?
+            </p>
+            <div className="flex gap-3">
+              <button
+                type="button"
+                onClick={() => setDeleteBlockedTimeId(null)}
+                className="flex-1 rounded-xl border border-[#C8E6D8] bg-[#EFF8F4] py-2.5 text-sm font-semibold text-[#4A6B5E] transition-colors hover:bg-[#C8E6D8]"
+              >
+                Avbryt
+              </button>
+              <button
+                type="button"
+                onClick={confirmDeleteBlockedTime}
                 className="flex-1 rounded-xl bg-[#dc2626] py-2.5 text-sm font-bold text-white transition-colors hover:bg-[#b91c1c]"
               >
                 Slett

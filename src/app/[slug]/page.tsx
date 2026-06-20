@@ -15,6 +15,7 @@ import {
   isPastDate,
   mergeWithDefaults,
   type AvailabilityEntry,
+  type BlockedPeriod,
   type BookingSlot,
 } from "@/lib/availability";
 import {
@@ -161,6 +162,7 @@ export default function SalonPage() {
     Map<string, AvailabilityEntry[]>
   >(new Map());
   const [monthBookings, setMonthBookings] = useState<BookingSlot[]>([]);
+  const [monthBlockedPeriods, setMonthBlockedPeriods] = useState<BlockedPeriod[]>([]);
   const [scheduleLoading, setScheduleLoading] = useState(false);
   const [salonRating, setSalonRating] = useState<{ avg: number; count: number } | null>(null);
   const [showWaitlist, setShowWaitlist] = useState(false);
@@ -262,13 +264,21 @@ export default function SalonPage() {
         .gte("starts_at", monthStart.toISOString())
         .lte("starts_at", monthEnd.toISOString());
 
+      const blockedQuery = supabase
+        .from("blocked_times")
+        .select("starts_at, ends_at, staff_id")
+        .eq("salon_id", salon!.id)
+        .lte("starts_at", monthEnd.toISOString())
+        .gte("ends_at", monthStart.toISOString());
+
       if (selectedStaffId) {
-        const [availRes, bookingsRes] = await Promise.all([
+        const [availRes, bookingsRes, blockedRes] = await Promise.all([
           supabase
             .from("availability")
             .select("day_of_week, start_time, end_time, is_active")
             .eq("staff_id", selectedStaffId),
           bookingsQuery.eq("staff_id", selectedStaffId),
+          blockedQuery,
         ]);
 
         if (cancelled) return;
@@ -279,9 +289,10 @@ export default function SalonPage() {
             : defaultWeekSchedule(),
         );
         setMonthBookings((bookingsRes.data as BookingSlot[] | null) ?? []);
+        setMonthBlockedPeriods((blockedRes.data as BlockedPeriod[] | null) ?? []);
       } else {
         const staffIds = staffList.map((s) => s.id);
-        const [availRes, bookingsRes] = await Promise.all([
+        const [availRes, bookingsRes, blockedRes] = await Promise.all([
           staffIds.length > 0
             ? supabase
                 .from("availability")
@@ -289,6 +300,7 @@ export default function SalonPage() {
                 .in("staff_id", staffIds)
             : Promise.resolve({ data: [] as never[] }),
           bookingsQuery,
+          blockedQuery,
         ]);
 
         if (cancelled) return;
@@ -303,6 +315,7 @@ export default function SalonPage() {
         }
         setAllStaffAvailability(byStaff);
         setMonthBookings((bookingsRes.data as BookingSlot[] | null) ?? []);
+        setMonthBlockedPeriods((blockedRes.data as BlockedPeriod[] | null) ?? []);
       }
 
       setScheduleLoading(false);
@@ -344,6 +357,7 @@ export default function SalonPage() {
         durationMin,
         monthBookings,
         selectedStaffId,
+        monthBlockedPeriods,
       );
     }
     return getSlotsForDateAnyStaff(
@@ -352,6 +366,7 @@ export default function SalonPage() {
       staffList.map((s) => s.id),
       durationMin,
       monthBookings,
+      monthBlockedPeriods,
     );
   }, [
     selectedDateKey,
@@ -361,6 +376,7 @@ export default function SalonPage() {
     staffList,
     durationMin,
     monthBookings,
+    monthBlockedPeriods,
   ]);
 
   const occupiedSlots = useMemo(() => {

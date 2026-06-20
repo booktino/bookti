@@ -14,6 +14,12 @@ export type BookingSlot = {
   staff_id: string | null;
 };
 
+export type BlockedPeriod = {
+  starts_at: string;
+  ends_at: string;
+  staff_id: string | null;
+};
+
 /** UI order: Monday → Sunday. day_of_week: 0=Sunday, 1=Monday … 6=Saturday */
 export const WEEKDAY_LABELS = [
   { day_of_week: 1, label: "Mandag" },
@@ -95,12 +101,51 @@ export function slotOverlapsBooking(
   });
 }
 
+export function slotOverlapsBlockedTime(
+  slotStart: Date,
+  slotEnd: Date,
+  blockedPeriods: BlockedPeriod[],
+  staffId: string | null,
+): boolean {
+  return blockedPeriods.some((blocked) => {
+    if (blocked.staff_id !== null) {
+      if (staffId !== null && staffId !== blocked.staff_id) return false;
+    }
+    const bStart = new Date(blocked.starts_at);
+    const bEnd = new Date(blocked.ends_at);
+    return slotStart < bEnd && slotEnd > bStart;
+  });
+}
+
+/** Calendar view: staffId null = salon-wide blocks only; set = salon-wide + that staff. */
+export function isDayBlockedForStaff(
+  dateKey: string,
+  blockedPeriods: BlockedPeriod[],
+  staffId: string | null,
+): boolean {
+  const [year, month, day] = dateKey.split("-").map(Number);
+  const dayStart = new Date(year, month - 1, day, 0, 0, 0, 0);
+  const dayEnd = new Date(year, month - 1, day, 23, 59, 59, 999);
+
+  return blockedPeriods.some((blocked) => {
+    if (staffId === null) {
+      if (blocked.staff_id !== null) return false;
+    } else if (blocked.staff_id !== null && blocked.staff_id !== staffId) {
+      return false;
+    }
+    const bStart = new Date(blocked.starts_at);
+    const bEnd = new Date(blocked.ends_at);
+    return dayStart <= bEnd && dayEnd >= bStart;
+  });
+}
+
 export function getSlotsForDate(
   dateKey: string,
   schedule: AvailabilityEntry[],
   durationMin: number,
   bookings: BookingSlot[],
   staffId: string | null,
+  blockedPeriods: BlockedPeriod[] = [],
 ): string[] {
   const [year, month, day] = dateKey.split("-").map(Number);
   const date = new Date(year, month - 1, day);
@@ -114,7 +159,9 @@ export function getSlotsForDate(
     const [h, m] = time.split(":").map(Number);
     const slotStart = new Date(year, month - 1, day, h, m, 0, 0);
     const slotEnd = new Date(slotStart.getTime() + durationMin * 60_000);
-    return !slotOverlapsBooking(slotStart, slotEnd, bookings, staffId);
+    if (slotOverlapsBooking(slotStart, slotEnd, bookings, staffId)) return false;
+    if (slotOverlapsBlockedTime(slotStart, slotEnd, blockedPeriods, staffId)) return false;
+    return true;
   });
 }
 
@@ -157,12 +204,20 @@ export function getSlotsForDateAnyStaff(
   staffIds: string[],
   durationMin: number,
   bookings: BookingSlot[],
+  blockedPeriods: BlockedPeriod[] = [],
 ): string[] {
   const allSlots = new Set<string>();
 
   for (const staffId of staffIds) {
     const schedule = schedulesByStaff.get(staffId) ?? defaultWeekSchedule();
-    const slots = getSlotsForDate(dateKey, schedule, durationMin, bookings, staffId);
+    const slots = getSlotsForDate(
+      dateKey,
+      schedule,
+      durationMin,
+      bookings,
+      staffId,
+      blockedPeriods,
+    );
     for (const slot of slots) allSlots.add(slot);
   }
 
