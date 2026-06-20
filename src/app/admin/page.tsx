@@ -3394,6 +3394,51 @@ export default function AdminPage() {
                   </>
                 )}
               </div>
+
+              <section className="mt-8 overflow-hidden rounded-xl border border-[#C8E6D8] bg-white shadow-sm">
+                <div className="flex items-center justify-between border-b border-[#C8E6D8] bg-[#f0faf6] px-4 py-3">
+                  <h3 className="text-sm font-bold text-[#0F6E56]">Stengt periode</h3>
+                  <button
+                    type="button"
+                    onClick={openBlockedPeriodModal}
+                    className="rounded-lg bg-[#0F6E56] px-3 py-1.5 text-xs font-bold text-white transition-colors hover:bg-[#0d5c48]"
+                  >
+                    + Stengt periode
+                  </button>
+                </div>
+                {upcomingBlockedTimes.length === 0 ? (
+                  <p className="px-4 py-6 text-center text-sm text-[#7A9A8E]">
+                    Ingen planlagte stengte perioder
+                  </p>
+                ) : (
+                  <ul className="divide-y divide-[#C8E6D8]">
+                    {upcomingBlockedTimes.map((b) => (
+                      <li
+                        key={b.id}
+                        className="flex items-start justify-between gap-3 px-4 py-3"
+                      >
+                        <div className="min-w-0 flex-1">
+                          <p className="text-sm font-semibold text-[#4A6B5E]">
+                            {formatBlockedPeriodRange(b.starts_at, b.ends_at)}
+                          </p>
+                          <p className="text-xs text-[#7A9A8E]">
+                            {blockedPeriodAppliesTo(b)}
+                            {b.reason ? ` · ${b.reason}` : ""}
+                          </p>
+                        </div>
+                        <button
+                          type="button"
+                          onClick={() => setDeleteBlockedTimeId(b.id)}
+                          className="shrink-0 rounded-lg border border-[#fee2e2] px-2 py-1 text-xs font-bold text-[#dc2626] hover:bg-[#fee2e2]"
+                          aria-label="Slett"
+                        >
+                          Slett
+                        </button>
+                      </li>
+                    ))}
+                  </ul>
+                )}
+              </section>
             </>
           )}
 
@@ -3523,51 +3568,6 @@ export default function AdminPage() {
                   </table>
                 )}
               </div>
-
-              <section className="mt-8 overflow-hidden rounded-xl border border-[#C8E6D8] bg-white shadow-sm">
-                <div className="flex items-center justify-between border-b border-[#C8E6D8] bg-[#f0faf6] px-4 py-3">
-                  <h3 className="text-sm font-bold text-[#0F6E56]">Stengt periode</h3>
-                  <button
-                    type="button"
-                    onClick={openBlockedPeriodModal}
-                    className="rounded-lg bg-[#0F6E56] px-3 py-1.5 text-xs font-bold text-white transition-colors hover:bg-[#0d5c48]"
-                  >
-                    + Stengt periode
-                  </button>
-                </div>
-                {upcomingBlockedTimes.length === 0 ? (
-                  <p className="px-4 py-6 text-center text-sm text-[#7A9A8E]">
-                    Ingen planlagte stengte perioder
-                  </p>
-                ) : (
-                  <ul className="divide-y divide-[#C8E6D8]">
-                    {upcomingBlockedTimes.map((b) => (
-                      <li
-                        key={b.id}
-                        className="flex items-start justify-between gap-3 px-4 py-3"
-                      >
-                        <div className="min-w-0 flex-1">
-                          <p className="text-sm font-semibold text-[#4A6B5E]">
-                            {formatBlockedPeriodRange(b.starts_at, b.ends_at)}
-                          </p>
-                          <p className="text-xs text-[#7A9A8E]">
-                            {blockedPeriodAppliesTo(b)}
-                            {b.reason ? ` · ${b.reason}` : ""}
-                          </p>
-                        </div>
-                        <button
-                          type="button"
-                          onClick={() => setDeleteBlockedTimeId(b.id)}
-                          className="shrink-0 rounded-lg border border-[#fee2e2] px-2 py-1 text-xs font-bold text-[#dc2626] hover:bg-[#fee2e2]"
-                          aria-label="Slett"
-                        >
-                          Slett
-                        </button>
-                      </li>
-                    ))}
-                  </ul>
-                )}
-              </section>
             </>
           )}
 
