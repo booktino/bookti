@@ -7,7 +7,12 @@ import { Logo } from "@/components/Logo";
 import { no } from "@/i18n/no";
 import type { Database } from "@/lib/database.types";
 import { createClient } from "@/lib/supabase";
+import OnboardingWizard from "@/components/OnboardingWizard";
 import QrCodeModal from "@/components/QrCodeModal";
+import {
+  consumeOnboardingResume,
+  isOnboardingCompleted,
+} from "@/lib/onboarding";
 import {
   defaultWeekSchedule,
   mergeWithDefaults,
@@ -1672,6 +1677,7 @@ export default function AdminPage() {
   const [services, setServices] = useState<Service[]>([]);
   const [staffList, setStaffList] = useState<Staff[]>([]);
   const [staffCount, setStaffCount] = useState(0);
+  const [showOnboardingWizard, setShowOnboardingWizard] = useState(false);
 
   const [serviceModalOpen, setServiceModalOpen] = useState(false);
   const [editingService, setEditingService] = useState<Service | null>(null);
@@ -2094,6 +2100,18 @@ export default function AdminPage() {
       cancelled = true;
     };
   }, [router]);
+
+  useEffect(() => {
+    if (loading || !salon) return;
+
+    const isNewSalon = staffList.length === 0 && services.length === 0;
+    const resume = consumeOnboardingResume(salon.id);
+    const completed = isOnboardingCompleted(salon.id);
+
+    if (!completed && (isNewSalon || resume)) {
+      setShowOnboardingWizard(true);
+    }
+  }, [loading, salon, staffList.length, services.length]);
 
   useEffect(() => {
     const salonId = salon?.id;
@@ -4108,6 +4126,113 @@ export default function AdminPage() {
         salonName={salon?.name ?? ""}
         slug={salon?.slug ?? ""}
       />
+
+      {showOnboardingWizard && salon && (
+        <OnboardingWizard
+          salon={{ id: salon.id, slug: salon.slug, name: salon.name }}
+          hasStaff={staffList.length > 0}
+          onAddStaff={openAddStaff}
+          onAddService={openAddService}
+          onOpenAvailability={() => {
+            const firstStaff = staffList[0];
+            if (firstStaff) void openAvailabilityModal(firstStaff);
+          }}
+          onClose={() => setShowOnboardingWizard(false)}
+        />
+      )}
+
+      {serviceModalOpen && (
+        <div
+          className="fixed inset-0 z-[60] flex items-center justify-center bg-black/60 p-4"
+          onClick={closeServiceModal}
+        >
+          <div
+            className="w-full max-w-md rounded-xl border border-[#C8E6D8] bg-white p-6 shadow-xl"
+            onClick={(e) => e.stopPropagation()}
+          >
+            <h2 className="mb-4 text-lg font-bold text-[#0F6E56]">
+              {editingService ? "Rediger tjeneste" : "Legg til tjeneste"}
+            </h2>
+            <form onSubmit={saveService} className="space-y-4">
+              <label className="block">
+                <span className="text-xs font-bold text-[#7A9A8E]">Navn *</span>
+                <input
+                  type="text"
+                  required
+                  value={serviceForm.name}
+                  onChange={(e) => setServiceForm((f) => ({ ...f, name: e.target.value }))}
+                  className={inputClass}
+                />
+              </label>
+              <label className="block">
+                <span className="text-xs font-bold text-[#7A9A8E]">Beskrivelse</span>
+                <textarea
+                  value={serviceForm.description}
+                  onChange={(e) =>
+                    setServiceForm((f) => ({ ...f, description: e.target.value }))
+                  }
+                  rows={2}
+                  className={inputClass}
+                />
+              </label>
+              <div className="grid grid-cols-2 gap-3">
+                <label className="block">
+                  <span className="text-xs font-bold text-[#7A9A8E]">Varighet (min)</span>
+                  <input
+                    type="number"
+                    min={1}
+                    value={serviceForm.duration_min}
+                    onChange={(e) =>
+                      setServiceForm((f) => ({ ...f, duration_min: e.target.value }))
+                    }
+                    className={inputClass}
+                  />
+                </label>
+                <label className="block">
+                  <span className="text-xs font-bold text-[#7A9A8E]">Pris (kr)</span>
+                  <input
+                    type="number"
+                    min={0}
+                    value={serviceForm.price_nok}
+                    onChange={(e) =>
+                      setServiceForm((f) => ({ ...f, price_nok: e.target.value }))
+                    }
+                    className={inputClass}
+                  />
+                </label>
+              </div>
+              <label className="flex items-center gap-3">
+                <input
+                  type="checkbox"
+                  checked={serviceForm.is_active}
+                  onChange={(e) =>
+                    setServiceForm((f) => ({ ...f, is_active: e.target.checked }))
+                  }
+                  className="accent-[#0F6E56]"
+                />
+                <span className="text-sm font-semibold">Aktiv</span>
+              </label>
+              <div className="flex gap-3 pt-2">
+                <button
+                  type="button"
+                  onClick={closeServiceModal}
+                  disabled={serviceSaving}
+                  className="flex-1 rounded-xl border border-[#C8E6D8] bg-[#EFF8F4] py-2.5 text-sm font-semibold text-[#4A6B5E] transition-colors hover:bg-[#C8E6D8] disabled:opacity-60"
+                >
+                  Avbryt
+                </button>
+                <button
+                  type="submit"
+                  disabled={serviceSaving}
+                  className="flex-1 rounded-xl bg-[#0F6E56] py-2.5 text-sm font-bold text-white transition-colors hover:bg-[#0d5c48] disabled:opacity-60"
+                >
+                  {serviceSaving ? "Lagrer…" : "Lagre"}
+                </button>
+              </div>
+            </form>
+          </div>
+        </div>
+      )}
 
       {staffModalOpen && (
         <div

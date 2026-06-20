@@ -6,6 +6,11 @@ import { useRouter } from "next/navigation";
 import { Logo } from "@/components/Logo";
 import { no } from "@/i18n/no";
 import type { Database } from "@/lib/database.types";
+import {
+  clearOnboardingCompleted,
+  isOnboardingCompleted,
+  setOnboardingResume,
+} from "@/lib/onboarding";
 import { createClient } from "@/lib/supabase";
 
 type Salon = Pick<
@@ -16,7 +21,13 @@ type Salon = Pick<
 type DashboardState =
   | { status: "loading" }
   | { status: "no-salon" }
-  | { status: "ready"; salon: Salon };
+  | {
+      status: "ready";
+      salon: Salon;
+      hasStaff: boolean;
+      hasService: boolean;
+      showSetupBanner: boolean;
+    };
 
 export default function DashboardPage() {
   const router = useRouter();
@@ -59,7 +70,24 @@ export default function DashboardPage() {
         return;
       }
 
-      setState({ status: "ready", salon });
+      const [staffRes, servicesRes] = await Promise.all([
+        supabase.from("staff").select("id").eq("salon_id", salon.id).limit(1),
+        supabase.from("services").select("id").eq("salon_id", salon.id).limit(1),
+      ]);
+
+      if (cancelled) return;
+
+      const hasStaff = (staffRes.data?.length ?? 0) > 0;
+      const hasService = (servicesRes.data?.length ?? 0) > 0;
+      const showSetupBanner = !isOnboardingCompleted(salon.id);
+
+      setState({
+        status: "ready",
+        salon,
+        hasStaff,
+        hasService,
+        showSetupBanner,
+      });
     }
 
     loadDashboard();
@@ -133,9 +161,14 @@ export default function DashboardPage() {
     );
   }
 
-  const { salon } = state;
+  const { salon, hasStaff, hasService, showSetupBanner } = state;
   const trialDaysLeft =
     salon.plan === "trial" ? getTrialDaysLeft(salon.trial_ends_at) : 0;
+
+  function handleContinueSetup() {
+    clearOnboardingCompleted(salon.id);
+    setOnboardingResume(salon.id);
+  }
 
   return (
     <div className="flex min-h-screen flex-col bg-[#EFF8F4] font-sans text-[#0D3B2E]">
@@ -151,6 +184,44 @@ export default function DashboardPage() {
 
       <main className="flex-1 px-4 py-10">
         <div className="mx-auto max-w-3xl">
+          {showSetupBanner && (
+            <div className="mb-6 rounded-xl border border-[#C8E6D8] bg-white p-5 shadow-sm">
+              <h2 className="text-sm font-bold text-[#0F6E56]">Fullfør oppsettet</h2>
+              <p className="mt-1 text-sm text-[#4A6B5E]">
+                Du er nesten klar — fullfør disse stegene for å ta imot bookinger.
+              </p>
+              <ul className="mt-4 space-y-2 text-sm">
+                <li className="flex items-center gap-2 text-[#4A6B5E]">
+                  <span className={hasStaff ? "text-[#0F6E56]" : "text-[#7A9A8E]"}>
+                    {hasStaff ? "✓" : "○"}
+                  </span>
+                  <span className={hasStaff ? "font-semibold text-[#0F6E56]" : ""}>
+                    Ansatt
+                  </span>
+                </li>
+                <li className="flex items-center gap-2 text-[#4A6B5E]">
+                  <span className={hasService ? "text-[#0F6E56]" : "text-[#7A9A8E]"}>
+                    {hasService ? "✓" : "○"}
+                  </span>
+                  <span className={hasService ? "font-semibold text-[#0F6E56]" : ""}>
+                    Tjeneste
+                  </span>
+                </li>
+                <li className="flex items-center gap-2 text-[#4A6B5E]">
+                  <span className="text-[#7A9A8E]">○</span>
+                  <span>Arbeidstider</span>
+                </li>
+              </ul>
+              <Link
+                href="/admin"
+                onClick={handleContinueSetup}
+                className="mt-4 inline-flex text-sm font-bold text-[#0F6E56] transition-colors hover:text-[#5DCAA5]"
+              >
+                Fortsett oppsett →
+              </Link>
+            </div>
+          )}
+
           {salon.plan === "trial" && (
             <div className="mb-6 rounded-xl border border-[#C8E6D8] bg-white p-4 shadow-sm sm:flex sm:items-center sm:justify-between sm:gap-4">
               <p className="text-sm text-[#4A6B5E]">
