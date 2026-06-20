@@ -55,7 +55,7 @@ import {
 } from "@/lib/packages/customer-packages";
 import { getServiceIcon } from "@/lib/business-types";
 
-type AdminTab = "home" | "calendar" | "services" | "staff" | "clients" | "invoices" | "settings" | "reviews" | "statistikk";
+type AdminTab = "home" | "calendar" | "services" | "staff" | "clients" | "invoices" | "settings" | "reviews" | "statistikk" | "help";
 
 type Salon = Database["public"]["Tables"]["salons"]["Row"];
 type Service = Database["public"]["Tables"]["services"]["Row"];
@@ -383,7 +383,36 @@ const TABS: { id: AdminTab; label: string; icon: string }[] = [
   { id: "statistikk", label: "Statistikk", icon: "📊" },
   { id: "reviews", label: "Anmeldelser", icon: "⭐" },
   { id: "settings", label: no.admin.settings, icon: "⚙️" },
+  { id: "help", label: "Hjelp", icon: "❓" },
 ];
+
+const FAQ_ITEMS = [
+  {
+    question: "Hvordan legger jeg til en ansatt?",
+    answer: "Gå til Ansatte-fanen og klikk 'Legg til ansatt'.",
+  },
+  {
+    question: "Hvordan endrer jeg arbeidstider?",
+    answer: "Gå til Ansatte, finn personen og klikk 'Arbeidstider'.",
+  },
+  {
+    question: "Hvordan fungerer fakturering?",
+    answer:
+      "Faktura genereres automatisk når en booking er fullført. Du finner alle fakturaer under 'Fakturaer'-fanen.",
+  },
+  {
+    question: "Hvordan stenger jeg salongen for ferie?",
+    answer: "Gå til Kalender-fanen og klikk '+ Stengt periode'.",
+  },
+  {
+    question: "Hvordan kontakter jeg support?",
+    answer: "Send oss en e-post på kontakt@bookti.no, så svarer vi så fort vi kan.",
+  },
+];
+
+function supportMailtoHref(salonName: string) {
+  return `mailto:kontakt@bookti.no?subject=${encodeURIComponent(`Support - ${salonName}`)}`;
+}
 
 const inputClass =
   "mt-1 w-full rounded-lg border border-[#C8E6D8] bg-white px-3 py-2 text-sm outline-none focus:border-[#0F6E56] focus:ring-2 focus:ring-[#0F6E56]/20";
@@ -3050,6 +3079,14 @@ export default function AdminPage() {
             </button>
           ))}
         </nav>
+        <div className="border-t border-white/15 p-3">
+          <a
+            href={supportMailtoHref(salon.name)}
+            className="flex items-center gap-2 text-xs font-semibold text-white/80 transition-colors hover:text-white"
+          >
+            💬 Kontakt support
+          </a>
+        </div>
         <div className="border-t border-white/15 p-4">
           <p className="text-xs font-bold text-[#5DCAA5]">{FREE_TRIAL_MONTHS} mnd gratis</p>
           <p className="text-[10px] text-white/60">{salon.name}</p>
@@ -4189,6 +4226,45 @@ export default function AdminPage() {
                   error={notificationError}
                   onSave={saveNotificationSettings}
                 />
+              </section>
+            </div>
+          )}
+
+          {tab === "help" && (
+            <div className="max-w-2xl space-y-6">
+              <section className="rounded-xl border border-[#C8E6D8] bg-white p-5 shadow-sm">
+                <h3 className="mb-4 text-sm font-bold text-[#0F6E56]">Ofte stilte spørsmål</h3>
+                <div className="space-y-2">
+                  {FAQ_ITEMS.map((item) => (
+                    <details
+                      key={item.question}
+                      className="group rounded-lg border border-[#C8E6D8] bg-[#EFF8F4]/40 open:bg-white"
+                    >
+                      <summary className="cursor-pointer list-none px-4 py-3 text-sm font-semibold text-[#0D3B2E] marker:content-none [&::-webkit-details-marker]:hidden">
+                        <span className="flex items-center justify-between gap-2">
+                          {item.question}
+                          <span className="text-xs text-[#7A9A8E] transition-transform group-open:rotate-180">
+                            ▼
+                          </span>
+                        </span>
+                      </summary>
+                      <p className="border-t border-[#C8E6D8] px-4 py-3 text-sm text-[#4A6B5E]">
+                        {item.answer}
+                      </p>
+                    </details>
+                  ))}
+                </div>
+              </section>
+              <section className="rounded-xl border border-[#C8E6D8] bg-white p-5 shadow-sm">
+                <p className="text-sm font-semibold text-[#0D3B2E]">
+                  Fant du ikke svaret du lette etter?
+                </p>
+                <a
+                  href={supportMailtoHref(salon.name)}
+                  className="mt-3 inline-flex items-center gap-2 text-sm font-semibold text-[#0F6E56] hover:underline"
+                >
+                  💬 Kontakt support
+                </a>
               </section>
             </div>
           )}
